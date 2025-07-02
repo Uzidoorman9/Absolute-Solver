@@ -7,6 +7,8 @@ import random
 import time
 import aiohttp
 import asyncio
+import functools
+from typing import Callable, Coroutine, Any
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -26,8 +28,47 @@ TEST_GUILD = discord.Object(id=TEST_GUILD_ID)
 
 start_time = time.time()
 
+# --- Money system ---
+user_balances = {}
+gambling_enabled = True
+gambling_cooldowns = {}
+
+def get_balance(user_id: int) -> int:
+    return user_balances.get(user_id, 1000)  # start users with 1000 oil drops
+
+def update_balance(user_id: int, amount: int):
+    user_balances[user_id] = get_balance(user_id) + amount
+
+def check_cooldown(user_id: int) -> bool:
+    now = time.time()
+    if user_id not in gambling_cooldowns or now - gambling_cooldowns[user_id] > 5:
+        return True
+    return False
+
+def update_cooldown(user_id: int):
+    gambling_cooldowns[user_id] = time.time()
+
+def gambling_command(func: Callable[[discord.Interaction, int], Coroutine[Any, Any, None]]):
+    @functools.wraps(func)
+    async def wrapper(interaction: discord.Interaction, amount: int):
+        if not gambling_enabled:
+            await interaction.response.send_message("❌ Gambling commands are currently disabled.", ephemeral=True)
+            return
+        if amount <= 0:
+            await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+            return
+        if get_balance(interaction.user.id) < amount:
+            await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+            return
+        if not check_cooldown(interaction.user.id):
+            await interaction.response.send_message("⏳ Please wait before gambling again.", ephemeral=True)
+            return
+        update_cooldown(interaction.user.id)
+        await func(interaction, amount)
+    return wrapper
+
 # ----------------------
-# UTILITIES
+# EVENTS
 # ----------------------
 
 @bot.event
@@ -35,6 +76,40 @@ async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
     await tree.sync(guild=TEST_GUILD)
     print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # Talk mode: repeat & delete
+    if message.author.id in talk_enabled_users:
+        await message.channel.send(message.content)
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            pass
+
+    # Length limit enforcement
+    guild_id = message.guild.id if message.guild else None
+    if guild_id in length_limits:
+        limit_info = length_limits[guild_id]
+        max_len = limit_info["max_len"]
+        character = limit_info["character"]
+        if len(message.content) > max_len:
+            await message.channel.send(
+                f"⚠️ Your message is too long! Please keep it under {max_len} characters and stay in character as **{character}**."
+            )
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                pass
+
+    await bot.process_commands(message)
+
+# ----------------------
+# BASIC COMMANDS
+# ----------------------
 
 @tree.command(name="ping", description="Check if bot is alive", guild=TEST_GUILD)
 async def ping(interaction: discord.Interaction):
@@ -50,7 +125,8 @@ async def uptime(interaction: discord.Interaction):
 @tree.command(name="invite", description="Get invite link for this bot", guild=TEST_GUILD)
 async def invite(interaction: discord.Interaction):
     client_id = bot.user.id
-    invite_url = f"https://discord.com/oauth2/authorize?client_id={client_id}&permissions=274877991936&scope=bot%20applications.commands"
+    perms = 274877991936  # all permissions, adjust if you want
+    invite_url = f"https://discord.com/oauth2/authorize?client_id={client_id}&permissions={perms}&scope=bot%20applications.commands"
     await interaction.response.send_message(f"🔗 Invite me with: {invite_url}")
 
 @tree.command(name="botinfo", description="Information about this bot", guild=TEST_GUILD)
@@ -98,7 +174,7 @@ async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     await interaction.response.send_message(embed=embed)
 
 # ----------------------
-# MODERATION
+# MODERATION COMMANDS
 # ----------------------
 
 @tree.command(name="clear", description="Delete messages in this channel (admin only)", guild=TEST_GUILD)
@@ -273,208 +349,17 @@ async def set_length(interaction: discord.Interaction, max_length: int, characte
         f"✅ Chat length limit set to {max_length}. Users must roleplay as **{character}**."
     )
 
-@bot.event
-async def on_message(message):
-    # Ignore bot messages
-    if message.author.bot:
-        return
-
-    # Talk mode: repeat & delete message
-    if message.author.id in talk_enabled_users:
-        await message.channel.send(message.content)
-        try:
-            await message.delete()
-        except discord.Forbidden:
-            pass
-
-    # Length limit enforcement
-    guild_id = message.guild.id if message.guild else None
-    if guild_id in length_limits:
-        limit_info = length_limits[guild_id]
-        max_len = limit_info["max_len"]
-        character = limit_info["character"]
-        if len(message.content) > max_len:
-            await message.channel.send(
-                f"⚠️ Your message is too long! Please keep it under {max_len} characters and stay in character as **{character}**."
-            )
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                pass
-
-    await bot.process_commands(message)
-
 # ----------------------
-# SPAWN CHILD BOT
+# GAMBLING COMMANDS
 # ----------------------
-
-@tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.", guild=TEST_GUILD)
-@app_commands.describe(
-    prompt="The personality or behavior prompt for the chatbot",
-    token="The Discord token of the bot to turn into a chatbot"
-)
-async def spawn_bot(interaction: discord.Interaction, prompt: str, token: str):
-    if not GEMINI_API_KEY:
-        await interaction.response.send_message("❌ Gemini API key not set.", ephemeral=True)
-        return
-    await interaction.response.send_message("🚀 Starting chatbot...", ephemeral=True)
-    subprocess.Popen([
-        "python", "child_bot.py",
-        prompt,
-        GEMINI_API_KEY,
-        token
-    ])
-
-# ----------------------
-# FUN INTERACTION COMMANDS WITH GIFS
-# ----------------------
-
-fun_actions_gifs = {
-    "hit": {
-        "texts": ["throws a mighty punch at", "hits", "slaps hard", "throws a punchball at"],
-        "gifs": [
-            "https://media.giphy.com/media/xT9IgG50Fb7Mi0prBC/giphy.gif",
-            "https://media.giphy.com/media/3o6Zt6ML6BklcajjsA/giphy.gif",
-            "https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif"
-        ],
-    },
-    "kill": {
-        "texts": ["strikes down", "eliminates", "ends the life of", "zaps"],
-        "gifs": [
-            "https://media.giphy.com/media/oe33xf3B50fsc/giphy.gif",
-            "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
-            "https://media.giphy.com/media/3o6ZtaO9BZHcOjmErm/giphy.gif"
-        ],
-    },
-    "slap": {
-        "texts": ["slaps", "gives a big slap to", "smacks", "whacks"],
-        "gifs": [
-            "https://media.giphy.com/media/jLeyZWgtwgr2U/giphy.gif",
-            "https://media.giphy.com/media/mEtSQlxqBtWWA/giphy.gif",
-            "https://media.giphy.com/media/RXGNsyRb1hDJm/giphy.gif"
-        ],
-    },
-    "hug": {
-        "texts": ["gives a warm hug to", "hugs", "embraces", "wraps arms around"],
-        "gifs": [
-            "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
-            "https://media.giphy.com/media/od5H3PmEG5EVq/giphy.gif",
-            "https://media.giphy.com/media/sUIZWMnfd4Mb6/giphy.gif"
-        ],
-    },
-    "poke": {
-        "texts": ["pokes", "prods", "jabs at", "nudges"],
-        "gifs": [
-            "https://media.giphy.com/media/3o6ZtpxSZbQRRnwCKQ/giphy.gif",
-            "https://media.giphy.com/media/xUOxfjsW1mHu0j7ZNe/giphy.gif",
-            "https://media.giphy.com/media/j3iGKfXRKlLqw/giphy.gif"
-        ],
-    },
-    "highfive": {
-        "texts": ["gives a high five to", "slaps hands with", "high fives", "smacks hands with"],
-        "gifs": [
-            "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
-            "https://media.giphy.com/media/3oEdv1JziogkUlcK6Q/giphy.gif",
-            "https://media.giphy.com/media/1BXa2alBjrCXC/giphy.gif"
-        ],
-    },
-    "pat": {
-        "texts": ["pats", "gently pats", "gives a pat to", "softly pats"],
-        "gifs": [
-            "https://media.giphy.com/media/ye7OTQgwmVuVy/giphy.gif",
-            "https://media.giphy.com/media/L2z7dnOduqEow/giphy.gif",
-            "https://media.giphy.com/media/109ltuoSQT212w/giphy.gif"
-        ],
-    },
-}
-
-def create_interaction_command(action_name):
-    @tree.command(name=action_name, description=f"{action_name.capitalize()} a user with a fun GIF", guild=TEST_GUILD)
-    @app_commands.describe(user="User to interact with")
-    async def command(interaction: discord.Interaction, user: discord.Member):
-        gifs = fun_actions_gifs[action_name]["gifs"]
-        texts = fun_actions_gifs[action_name]["texts"]
-        gif = random.choice(gifs)
-        text = random.choice(texts)
-        msg = f"{interaction.user.mention} {text} {user.mention}!"
-        embed = discord.Embed(description=msg, color=discord.Color.random())
-        embed.set_image(url=gif)
-        await interaction.response.send_message(embed=embed)
-    return command
-
-for action in fun_actions_gifs.keys():
-    create_interaction_command(action)
-
-# ----------------------
-# GOOGLE GEMINI PLACEHOLDER (replace with your actual Gemini usage)
-# ----------------------
-
-@tree.command(name="generate", description="Generate text with Gemini", guild=TEST_GUILD)
-@app_commands.describe(prompt="Prompt to generate text from")
-async def generate(interaction: discord.Interaction, prompt: str):
-    await interaction.response.defer()
-    # Dummy example for generation - replace with actual Gemini API call
-    await asyncio.sleep(2)  # simulate API latency
-    response_text = f"Generated response for prompt: {prompt}"
-    await interaction.followup.send(response_text)
-
-@tree.command(name="analyze", description="Analyze text with Gemini", guild=TEST_GUILD)
-@app_commands.describe(text="Text to analyze")
-async def analyze(interaction: discord.Interaction, text: str):
-    await interaction.response.defer()
-    # Dummy example for analyze - replace with actual Gemini API call
-    await asyncio.sleep(2)
-    response_text = f"Analysis of text: {text}"
-    await interaction.followup.send(response_text)
-
-# ----------------------
-# MONEY & GAMBLING SYSTEM
-# ----------------------
-
-# In-memory user balances and cooldowns
-user_balances = {}
-cooldowns = {}
-cooldown_time = 5  # seconds cooldown on gambling commands
-gambling_enabled = True
-
-def is_gambling_enabled():
-    return gambling_enabled
-
-def check_cooldown(user_id):
-    last = cooldowns.get(user_id, 0)
-    return time.time() - last >= cooldown_time
-
-def update_cooldown(user_id):
-    cooldowns[user_id] = time.time()
-
-def get_balance(user_id):
-    return user_balances.get(user_id, 0)
-
-def set_balance(user_id, amount):
-    user_balances[user_id] = amount
-
-def change_balance(user_id, amount):
-    user_balances[user_id] = get_balance(user_id) + amount
-
-def gambling_command(func):
-    async def wrapper(interaction: discord.Interaction, *args, **kwargs):
-        if not gambling_enabled:
-            await interaction.response.send_message("❌ Gambling commands are currently disabled.", ephemeral=True)
-            return
-        if not check_cooldown(interaction.user.id):
-            await interaction.response.send_message("⏳ Please wait before using gambling commands again.", ephemeral=True)
-            return
-        update_cooldown(interaction.user.id)
-        await func(interaction, *args, **kwargs)
-    return wrapper
 
 @tree.command(name="balance", description="Check your oil drops balance", guild=TEST_GUILD)
 async def balance(interaction: discord.Interaction):
     bal = get_balance(interaction.user.id)
-    await interaction.response.send_message(f"💰 You have {bal} oil drops.")
+    await interaction.response.send_message(f"🛢️ You have {bal} oil drops.")
 
 @tree.command(name="give", description="Give oil drops to another user", guild=TEST_GUILD)
-@app_commands.describe(user="User to give to", amount="Amount of oil drops")
+@app_commands.describe(user="User to give oil drops to", amount="Amount to give")
 async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
     if amount <= 0:
         await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
@@ -482,143 +367,88 @@ async def give(interaction: discord.Interaction, user: discord.Member, amount: i
     if get_balance(interaction.user.id) < amount:
         await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
         return
-    if user.bot:
-        await interaction.response.send_message("❌ You cannot give oil drops to bots.", ephemeral=True)
-        return
-    change_balance(interaction.user.id, -amount)
-    change_balance(user.id, amount)
+    update_balance(interaction.user.id, -amount)
+    update_balance(user.id, amount)
     await interaction.response.send_message(f"✅ Gave {amount} oil drops to {user.mention}.")
 
-@tree.command(name="daily", description="Claim daily oil drops", guild=TEST_GUILD)
-async def daily(interaction: discord.Interaction):
-    now = time.time()
-    last_claim = cooldowns.get(f"daily_{interaction.user.id}", 0)
-    if now - last_claim < 24*3600:
-        left = int(24*3600 - (now - last_claim))
-        hrs, rem = divmod(left, 3600)
-        mins, sec = divmod(rem, 60)
-        await interaction.response.send_message(f"⏳ You already claimed daily. Come back in {hrs}h {mins}m {sec}s.", ephemeral=True)
-        return
-    cooldowns[f"daily_{interaction.user.id}"] = now
-    amount = random.randint(100, 500)
-    change_balance(interaction.user.id, amount)
-    await interaction.response.send_message(f"🎉 You claimed your daily {amount} oil drops!")
-
-@tree.command(name="gamble", description="Gamble oil drops", guild=TEST_GUILD)
-@app_commands.describe(amount="Amount to gamble")
+@tree.command(name="gamble", description="Gamble your oil drops (win or lose)", guild=TEST_GUILD)
 @gambling_command
 async def gamble(interaction: discord.Interaction, amount: int):
-    if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
-        return
-    bal = get_balance(interaction.user.id)
-    if bal < amount:
-        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
-        return
-    # 50% chance double, 50% lose
-    if random.random() < 0.5:
-        change_balance(interaction.user.id, amount)
-        await interaction.response.send_message(f"🎉 You won! You gained {amount} oil drops.")
+    win = random.random() < 0.5
+    if win:
+        winnings = amount
+        update_balance(interaction.user.id, winnings)
+        await interaction.response.send_message(f"🎉 You won {winnings} oil drops! 🎉")
     else:
-        change_balance(interaction.user.id, -amount)
-        await interaction.response.send_message(f"😢 You lost {amount} oil drops.")
+        update_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"😢 You lost {amount} oil drops. Better luck next time!")
 
-@tree.command(name="coinflip", description="Bet on coin flip", guild=TEST_GUILD)
-@app_commands.describe(amount="Amount to bet", choice="Heads or Tails")
-@gambling_command
-async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
-    if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
-        return
-    bal = get_balance(interaction.user.id)
-    if bal < amount:
-        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
-        return
-    choice = choice.lower()
-    if choice not in ["heads", "tails"]:
-        await interaction.response.send_message("❌ Choice must be 'Heads' or 'Tails'.", ephemeral=True)
-        return
-    outcome = random.choice(["heads", "tails"])
-    if outcome == choice:
-        change_balance(interaction.user.id, amount)
-        await interaction.response.send_message(f"🎉 The coin landed on {outcome}! You won {amount} oil drops.")
-    else:
-        change_balance(interaction.user.id, -amount)
-        await interaction.response.send_message(f"😢 The coin landed on {outcome}. You lost {amount} oil drops.")
-
-@tree.command(name="slots", description="Play slots", guild=TEST_GUILD)
-@app_commands.describe(amount="Amount to bet")
+@tree.command(name="slots", description="Play slots to win oil drops", guild=TEST_GUILD)
 @gambling_command
 async def slots(interaction: discord.Interaction, amount: int):
+    symbols = ["🍒", "🍋", "🍊", "🍉", "7️⃣", "⭐"]
+    result = [random.choice(symbols) for _ in range(3)]
+    await interaction.response.defer()
+    await asyncio.sleep(1)  # suspense
+    if len(set(result)) == 1:
+        winnings = amount * 5
+        update_balance(interaction.user.id, winnings)
+        await interaction.followup.send(f"🎰 {' '.join(result)}\nJackpot! You won {winnings} oil drops!")
+    elif len(set(result)) == 2:
+        winnings = amount * 2
+        update_balance(interaction.user.id, winnings)
+        await interaction.followup.send(f"🎰 {' '.join(result)}\nNice! You won {winnings} oil drops!")
+    else:
+        update_balance(interaction.user.id, -amount)
+        await interaction.followup.send(f"🎰 {' '.join(result)}\nNo win, you lost {amount} oil drops.")
+
+@tree.command(name="coinflip", description="Flip a coin and bet oil drops", guild=TEST_GUILD)
+@app_commands.describe(amount="Amount to bet", choice="Heads or Tails")
+async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
+    choice = choice.lower()
+    if choice not in ["heads", "tails"]:
+        await interaction.response.send_message("❌ Choice must be 'heads' or 'tails'.", ephemeral=True)
+        return
     if amount <= 0:
         await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
         return
-    bal = get_balance(interaction.user.id)
-    if bal < amount:
+    if get_balance(interaction.user.id) < amount:
         await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
         return
-    symbols = ["🍒", "🍋", "🍊", "⭐", "7️⃣"]
-    result = [random.choice(symbols) for _ in range(3)]
-    if len(set(result)) == 1:
-        payout = amount * 5
-        change_balance(interaction.user.id, payout)
-        await interaction.response.send_message(f"🎰 {' '.join(result)}\nJackpot! You won {payout} oil drops!")
-    elif len(set(result)) == 2:
-        payout = amount * 2
-        change_balance(interaction.user.id, payout)
-        await interaction.response.send_message(f"🎰 {' '.join(result)}\nNice! You won {payout} oil drops!")
+    if not check_cooldown(interaction.user.id):
+        await interaction.response.send_message("⏳ Please wait before gambling again.", ephemeral=True)
+        return
+    update_cooldown(interaction.user.id)
+
+    flip_result = random.choice(["heads", "tails"])
+    if flip_result == choice:
+        winnings = amount
+        update_balance(interaction.user.id, winnings)
+        await interaction.response.send_message(f"🪙 The coin landed on **{flip_result.capitalize()}**. You won {winnings} oil drops!")
     else:
-        change_balance(interaction.user.id, -amount)
-        await interaction.response.send_message(f"🎰 {' '.join(result)}\nNo luck. You lost {amount} oil drops.")
-
-@tree.command(name="leaderboard", description="Show top 10 richest users", guild=TEST_GUILD)
-async def leaderboard(interaction: discord.Interaction):
-    if not user_balances:
-        await interaction.response.send_message("No balances yet.")
-        return
-    sorted_bal = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title="🏆 Oil Drops Leaderboard", color=discord.Color.gold())
-    for i, (user_id, bal) in enumerate(sorted_bal, start=1):
-        user = bot.get_user(user_id)
-        name = user.name if user else f"User ID {user_id}"
-        embed.add_field(name=f"{i}. {name}", value=f"{bal} oil drops", inline=False)
-    await interaction.response.send_message(embed=embed)
-
-@tree.command(name="setbalance", description="Admin: Set user balance", guild=TEST_GUILD)
-@app_commands.describe(user="User to set balance for", amount="New balance")
-async def setbalance(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
-        return
-    if amount < 0:
-        await interaction.response.send_message("❌ Amount cannot be negative.", ephemeral=True)
-        return
-    set_balance(user.id, amount)
-    await interaction.response.send_message(f"✅ Set {user.mention}'s balance to {amount} oil drops.")
-
-@tree.command(name="addbalance", description="Admin: Add oil drops to user", guild=TEST_GUILD)
-@app_commands.describe(user="User to add to", amount="Amount to add")
-async def addbalance(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
-        return
-    if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
-        return
-    change_balance(user.id, amount)
-    await interaction.response.send_message(f"✅ Added {amount} oil drops to {user.mention}.")
-
-@tree.command(name="toggle_gambling", description="Admin: Enable or disable gambling commands", guild=TEST_GUILD)
-@app_commands.describe(enable="Enable or disable gambling")
-async def toggle_gambling(interaction: discord.Interaction, enable: bool):
-    global gambling_enabled
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need admin permissions to do that.", ephemeral=True)
-        return
-    gambling_enabled = enable
-    state = "enabled" if enable else "disabled"
-    await interaction.response.send_message(f"✅ Gambling commands are now {state}.")
+        update_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"🪙 The coin landed on **{flip_result.capitalize()}**. You lost {amount} oil drops.")
 
 # ----------------------
+# ADMIN TOGGLES
+# ----------------------
 
-bot.run(DISCORD_MANAGER_TOKEN)
+@tree.command(name="toggle_gambling", description="Enable or disable gambling commands (admin only)", guild=TEST_GUILD)
+async def toggle_gambling(interaction: discord.Interaction):
+    global gambling_enabled
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need Administrator permission.", ephemeral=True)
+        return
+    gambling_enabled = not gambling_enabled
+    status = "enabled" if gambling_enabled else "disabled"
+    await interaction.response.send_message(f"🎲 Gambling commands are now {status}.")
+
+# ----------------------
+# MAIN STARTUP
+# ----------------------
+
+if __name__ == "__main__":
+    if not DISCORD_MANAGER_TOKEN:
+        print("Error: DISCORD_MANAGER_TOKEN environment variable not set.")
+        exit(1)
+    bot.run(DISCORD_MANAGER_TOKEN)
