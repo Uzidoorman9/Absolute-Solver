@@ -6,6 +6,11 @@ from discord import app_commands
 import random
 import time
 import aiohttp
+import hashlib
+import base64
+import datetime
+import google.generativeai as genai
+from urllib.parse import quote_plus
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -22,6 +27,8 @@ length_limits = {}
 
 start_time = time.time()
 
+genai.configure(api_key=GEMINI_API_KEY)
+
 @bot.event
 async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
@@ -31,6 +38,20 @@ async def on_ready():
             print(f"✅ Synced slash commands to guild: {guild.name} ({guild.id})")
         except discord.errors.Forbidden:
             print(f"❌ Missing access to sync commands in: {guild.name} ({guild.id})")
+
+# ---------------------- ADMIN ----------------------
+
+@tree.command(name="reload", description="Reload all slash commands (admin only)")
+async def reload(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
+        return
+    try:
+        for guild in bot.guilds:
+            await tree.sync(guild=guild)
+        await interaction.response.send_message("✅ Commands reloaded for all guilds.")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Failed to reload: {e}", ephemeral=True)
 
 # ---------------------- UTILITIES ----------------------
 
@@ -239,7 +260,64 @@ async def dog(interaction: discord.Interaction):
             url = data['message']
             await interaction.response.send_message(url)
 
-# ---------------------- TALK MODE ----------------------
+# ---------------------- IMAGE GENERATION ----------------------
+
+@tree.command(name="generate", description="Generate an image from a prompt")
+@app_commands.describe(prompt="Describe the image you want")
+async def generate(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+    try:
+        response = genai.generate_image(
+            model="image-alpha-001",
+            prompt=prompt,
+            max_tokens=256,
+            temperature=0.75,
+            size="1024x1024",
+        )
+        image_url = response.data[0].image.url
+        embed = discord.Embed(title="🖼️ Generated Image", description=prompt)
+        embed.set_image(url=image_url)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to generate image: {e}")
+
+# ---------------------- IMAGE ANALYSIS ----------------------
+
+@tree.command(name="analyze", description="Analyze an image to get a description")
+@app_commands.describe(image="Upload an image to analyze")
+async def analyze(interaction: discord.Interaction, image: discord.Attachment):
+    await interaction.response.defer()
+    if not image.content_type or not image.content_type.startswith("image/"):
+        await interaction.followup.send("❌ Please upload a valid image file.")
+        return
+    try:
+        response = genai.chat.completions.create(
+            model="gemini-multimodal-beta",
+            modalities=["text", "image"],
+            prompt=[
+                {"type": "text", "text": "Describe the contents of this image."},
+                {"type": "image_url", "image_url": {"url": image.url}},
+            ],
+            temperature=0.3,
+            max_output_tokens=256,
+        )
+        desc = response.choices[0].message.content.strip()
+        await interaction.followup.send(f"🖼️ Image analysis:\n{desc}")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to analyze image: {e}")
+
+# ---------------------- REVERSE IMAGE SEARCH ----------------------
+
+@tree.command(name="reverse", description="Get a reverse image search link")
+@app_commands.describe(image="Upload an image to reverse search")
+async def reverse_search(interaction: discord.Interaction, image: discord.Attachment):
+    if not image.content_type or not image.content_type.startswith("image/"):
+        await interaction.response.send_message("❌ Please upload a valid image file.", ephemeral=True)
+        return
+    search_url = f"https://www.google.com/searchbyimage?image_url={quote_plus(image.url)}"
+    await interaction.response.send_message(f"🔍 Reverse Image Search: {search_url}")
+
+# ---------------------- TALK MODE & LENGTH LIMITS ----------------------
 
 @tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes yours.")
 async def talk_toggle(interaction: discord.Interaction):
@@ -284,7 +362,7 @@ async def on_message(message):
         character = limit_info["character"]
         if len(message.content) > max_len:
             await message.channel.send(
-                f"⚠️ Message too long! Stay under {max_len} characters and roleplay as **{character}**."
+                f"⚠️ Your message is too long! Please keep it under {max_len} characters and stay in character as **{character}**."
             )
             try:
                 await message.delete()
@@ -293,7 +371,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ---------------------- BOT SPAWNER ----------------------
+# ---------------------- SPAWN CHILD BOT ----------------------
 
 @tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.")
 @app_commands.describe(
