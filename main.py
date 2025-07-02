@@ -3,7 +3,6 @@ import subprocess
 import discord
 from discord.ext import commands
 from discord import app_commands
-from discord import Permissions
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -26,8 +25,7 @@ async def on_ready():
     await tree.sync(guild=guild)
     print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
 
-# Existing commands (bot, ping, talk_toggle, length)...
-
+# /bot command: spawn child chatbot bot
 @tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.")
 @app_commands.describe(
     prompt="The personality or behavior prompt for the chatbot",
@@ -35,7 +33,7 @@ async def on_ready():
 )
 async def spawn_bot(interaction: discord.Interaction, prompt: str, token: str):
     if not GEMINI_API_KEY:
-        await interaction.response.send_message("❌ Gemini API key not set in environment variables.", ephemeral=True)
+        await interaction.response.send_message("❌ Gemini API key not set.", ephemeral=True)
         return
     await interaction.response.send_message("🚀 Starting chatbot...", ephemeral=True)
     subprocess.Popen([
@@ -45,86 +43,106 @@ async def spawn_bot(interaction: discord.Interaction, prompt: str, token: str):
         token
     ])
 
+# /ping command
 @tree.command(name="ping", description="Check if the bot is online.")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!")
 
-@tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot will say your messages and delete yours.")
+# /talk_toggle command
+@tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes originals.")
 async def talk_toggle(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    if user_id in talk_enabled_users:
-        talk_enabled_users.remove(user_id)
+    uid = interaction.user.id
+    if uid in talk_enabled_users:
+        talk_enabled_users.remove(uid)
         await interaction.response.send_message("🛑 Talk mode disabled.", ephemeral=True)
     else:
-        talk_enabled_users.add(user_id)
+        talk_enabled_users.add(uid)
         await interaction.response.send_message("✅ Talk mode enabled.", ephemeral=True)
 
+# /length command: set max char & character name
 @tree.command(name="length", description="Set chat length limit and character name.")
 @app_commands.describe(
-    max_length="Maximum allowed characters per message",
+    max_length="Max characters per message",
     character="Character name users should roleplay as"
 )
 async def set_length(interaction: discord.Interaction, max_length: int, character: str):
     if max_length <= 0:
-        await interaction.response.send_message("❌ Max length must be a positive number.", ephemeral=True)
+        await interaction.response.send_message("❌ Max length must be positive.", ephemeral=True)
         return
     length_limits[interaction.guild_id] = {"max_len": max_length, "character": character}
     await interaction.response.send_message(
-        f"✅ Chat length limit set to {max_length} characters. Users must roleplay as **{character}**."
+        f"✅ Chat length limit set to {max_length}. Users must roleplay as **{character}**."
     )
 
-# New commands below
-
-@tree.command(name="userinfo", description="Get info about a user.")
-@app_commands.describe(user="The user to get info about")
+# /userinfo command
+@tree.command(name="userinfo", description="Show info about a user.")
+@app_commands.describe(user="User to get info about")
 async def userinfo(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
     embed = discord.Embed(title=f"User Info - {user}", color=discord.Color.blue())
     embed.set_thumbnail(url=user.display_avatar.url)
-    embed.add_field(name="ID", value=user.id, inline=True)
-    embed.add_field(name="Bot?", value=user.bot, inline=True)
-    embed.add_field(name="Top role", value=user.top_role.name, inline=True)
-    embed.add_field(name="Joined server", value=user.joined_at.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
-    embed.add_field(name="Account created", value=user.created_at.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+    embed.add_field(name="ID", value=user.id)
+    embed.add_field(name="Bot?", value=user.bot)
+    embed.add_field(name="Top Role", value=user.top_role.name)
+    embed.add_field(name="Joined Server", value=user.joined_at.strftime("%Y-%m-%d %H:%M:%S"))
+    embed.add_field(name="Account Created", value=user.created_at.strftime("%Y-%m-%d %H:%M:%S"))
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="serverinfo", description="Get info about this server.")
+# /serverinfo command
+@tree.command(name="serverinfo", description="Show info about the server.")
 async def serverinfo(interaction: discord.Interaction):
     guild = interaction.guild
     embed = discord.Embed(title=f"Server Info - {guild.name}", color=discord.Color.green())
     embed.set_thumbnail(url=guild.icon.url if guild.icon else discord.Embed.Empty)
-    embed.add_field(name="ID", value=guild.id, inline=True)
-    embed.add_field(name="Owner", value=str(guild.owner), inline=True)
-    embed.add_field(name="Members", value=guild.member_count, inline=True)
-    embed.add_field(name="Channels", value=len(guild.channels), inline=True)
-    embed.add_field(name="Created", value=guild.created_at.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+    embed.add_field(name="ID", value=guild.id)
+    embed.add_field(name="Owner", value=str(guild.owner))
+    embed.add_field(name="Members", value=guild.member_count)
+    embed.add_field(name="Channels", value=len(guild.channels))
+    embed.add_field(name="Created At", value=guild.created_at.strftime("%Y-%m-%d %H:%M:%S"))
     await interaction.response.send_message(embed=embed)
 
+# /echo command
 @tree.command(name="echo", description="Make the bot repeat your message.")
-@app_commands.describe(message="The message to echo")
+@app_commands.describe(message="Message to echo")
 async def echo(interaction: discord.Interaction, message: str):
     await interaction.response.send_message(message)
 
-@tree.command(name="clear", description="Clear messages in the channel (Admin only).")
-@app_commands.describe(amount="Number of messages to delete (max 100)")
+# /clear command
+@tree.command(name="clear", description="Delete messages in the channel (admin only).")
+@app_commands.describe(amount="Number of messages to delete (1-100)")
 async def clear(interaction: discord.Interaction, amount: int):
-    # Check permissions
     if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You need Manage Messages permission to use this.", ephemeral=True)
+        await interaction.response.send_message("❌ You need Manage Messages permission.", ephemeral=True)
         return
-    if amount <= 0 or amount > 100:
+    if amount < 1 or amount > 100:
         await interaction.response.send_message("❌ Amount must be between 1 and 100.", ephemeral=True)
         return
-
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.response.send_message(f"🧹 Deleted {len(deleted)} messages.", ephemeral=True)
 
+# /roll command - roll a dice
+@tree.command(name="roll", description="Roll a dice (1-100).")
+async def roll(interaction: discord.Interaction):
+    import random
+    result = random.randint(1, 100)
+    await interaction.response.send_message(f"🎲 You rolled: {result}")
+
+# /avatar command - show user avatar
+@tree.command(name="avatar", description="Show a user's avatar.")
+@app_commands.describe(user="User to show avatar of")
+async def avatar(interaction: discord.Interaction, user: discord.Member = None):
+    user = user or interaction.user
+    embed = discord.Embed(title=f"{user}'s Avatar")
+    embed.set_image(url=user.display_avatar.url)
+    await interaction.response.send_message(embed=embed)
+
 @bot.event
 async def on_message(message):
+    # Ignore all bots (including yourself)
     if message.author.bot:
         return
 
-    # Talk mode: repeat & delete message
+    # Talk mode: bot repeats and deletes user's message
     if message.author.id in talk_enabled_users:
         await message.channel.send(message.content)
         try:
