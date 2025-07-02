@@ -330,12 +330,7 @@ async def spawn_bot(interaction: discord.Interaction, prompt: str, token: str):
 
 fun_actions_gifs = {
     "hit": {
-        "texts": [
-            "throws a mighty punch at",
-            "hits",
-            "slaps hard",
-            "throws a punchball at"
-        ],
+        "texts": ["throws a mighty punch at", "hits", "slaps hard", "throws a punchball at"],
         "gifs": [
             "https://media.giphy.com/media/xT9IgG50Fb7Mi0prBC/giphy.gif",
             "https://media.giphy.com/media/3o6Zt6ML6BklcajjsA/giphy.gif",
@@ -343,12 +338,7 @@ fun_actions_gifs = {
         ],
     },
     "kill": {
-        "texts": [
-            "strikes down",
-            "eliminates",
-            "ends the life of",
-            "zaps"
-        ],
+        "texts": ["strikes down", "eliminates", "ends the life of", "zaps"],
         "gifs": [
             "https://media.giphy.com/media/oe33xf3B50fsc/giphy.gif",
             "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
@@ -356,12 +346,7 @@ fun_actions_gifs = {
         ],
     },
     "slap": {
-        "texts": [
-            "slaps",
-            "gives a big slap to",
-            "smacks",
-            "whacks"
-        ],
+        "texts": ["slaps", "gives a big slap to", "smacks", "whacks"],
         "gifs": [
             "https://media.giphy.com/media/jLeyZWgtwgr2U/giphy.gif",
             "https://media.giphy.com/media/mEtSQlxqBtWWA/giphy.gif",
@@ -369,12 +354,7 @@ fun_actions_gifs = {
         ],
     },
     "hug": {
-        "texts": [
-            "gives a warm hug to",
-            "hugs",
-            "embraces",
-            "wraps arms around"
-        ],
+        "texts": ["gives a warm hug to", "hugs", "embraces", "wraps arms around"],
         "gifs": [
             "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
             "https://media.giphy.com/media/od5H3PmEG5EVq/giphy.gif",
@@ -382,12 +362,7 @@ fun_actions_gifs = {
         ],
     },
     "poke": {
-        "texts": [
-            "pokes",
-            "prods",
-            "jabs at",
-            "nudges"
-        ],
+        "texts": ["pokes", "prods", "jabs at", "nudges"],
         "gifs": [
             "https://media.giphy.com/media/3o6ZtpxSZbQRRnwCKQ/giphy.gif",
             "https://media.giphy.com/media/xUOxfjsW1mHu0j7ZNe/giphy.gif",
@@ -395,12 +370,7 @@ fun_actions_gifs = {
         ],
     },
     "highfive": {
-        "texts": [
-            "gives a high five to",
-            "slaps hands with",
-            "high fives",
-            "smacks hands with"
-        ],
+        "texts": ["gives a high five to", "slaps hands with", "high fives", "smacks hands with"],
         "gifs": [
             "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
             "https://media.giphy.com/media/3oEdv1JziogkUlcK6Q/giphy.gif",
@@ -408,12 +378,7 @@ fun_actions_gifs = {
         ],
     },
     "pat": {
-        "texts": [
-            "pats",
-            "gently pats",
-            "gives a friendly pat to",
-            "softly pats"
-        ],
+        "texts": ["pats", "gently pats", "gives a friendly pat to", "softly pats"],
         "gifs": [
             "https://media.giphy.com/media/4HP0ddZnNVvKU/giphy.gif",
             "https://media.giphy.com/media/L2z7DnOduqEow/giphy.gif",
@@ -438,8 +403,32 @@ def create_interaction_command(action_name):
         await interaction.response.send_message(embed=embed)
     return command
 
-# Register all interaction commands dynamically
 for act in fun_actions_gifs.keys():
     create_interaction_command(act)
+
+# ----------------------
+# IMAGE GENERATION & ANALYSIS
+# ----------------------
+
+@tree.command(name="generate", description="Generate an image with Stable Diffusion (mock placeholder)")
+@app_commands.describe(prompt="Describe the image you want")
+async def generate(interaction: discord.Interaction, prompt: str):
+    # TODO: Replace with real Stable Diffusion API integration
+    await interaction.response.defer()
+    await asyncio.sleep(2)
+    await interaction.followup.send(f"🖼️ (Mock) Generated image for: {prompt}\nhttps://via.placeholder.com/512.png?text=Generated+Image")
+
+@tree.command(name="analyze", description="Analyze an image using Gemini (mock placeholder)")
+@app_commands.describe(image_url="Image URL to analyze")
+async def analyze(interaction: discord.Interaction, image_url: str):
+    # TODO: Replace with real Gemini API integration
+    await interaction.response.defer()
+    await asyncio.sleep(2)
+    await interaction.followup.send(f"🔍 (Mock) Analyzed image: {image_url}\nDescription: This image likely contains objects or people.")
+
+@tree.command(name="reverse_image", description="Reverse search an image (mock placeholder)")
+@app_commands.describe(image_url="Image URL to search")
+async def reverse_image(interaction: discord.Interaction, image_url: str):
+    await interaction.response.send_message(f"🔁 (Mock) Reverse image search for {image_url}:\nPossibly matches known meme or photo")
 
 bot.run(DISCORD_MANAGER_TOKEN)
