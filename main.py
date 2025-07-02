@@ -16,12 +16,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 talk_enabled_users = set()  # user IDs with talk mode on
 length_limits = {}  # guild_id -> {"max_len": int, "character": str}
 
+TEST_GUILD_ID = 1388197138487574742  # Your server ID
+
 @bot.event
 async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
-    await tree.sync()
+    guild = discord.Object(id=TEST_GUILD_ID)
+    await tree.sync(guild=guild)
+    print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
 
-# --- Spawn a chatbot ---
 @tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.")
 @app_commands.describe(
     prompt="The personality or behavior prompt for the chatbot",
@@ -39,12 +42,10 @@ async def spawn_bot(interaction: discord.Interaction, prompt: str, token: str):
         token
     ])
 
-# --- Ping test ---
 @tree.command(name="ping", description="Check if the bot is online.")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!")
 
-# --- Toggle talk mode ---
 @tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot will say your messages and delete yours.")
 async def talk_toggle(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -55,7 +56,6 @@ async def talk_toggle(interaction: discord.Interaction):
         talk_enabled_users.add(user_id)
         await interaction.response.send_message("✅ Talk mode enabled.", ephemeral=True)
 
-# --- Set length and character name ---
 @tree.command(name="length", description="Set chat length limit and character name.")
 @app_commands.describe(
     max_length="Maximum allowed characters per message",
