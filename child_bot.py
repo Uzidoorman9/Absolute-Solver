@@ -1,5 +1,5 @@
-import discord
 import sys
+import discord
 import google.generativeai as genai
 
 prompt_base = sys.argv[1]
@@ -21,9 +21,14 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user:
         return
-    # Respond to all messages or add filters here
-    full_prompt = f"{prompt_base}\nUser: {message.content}"
-    response = model.generate_content(full_prompt)
-    await message.channel.send(response.text)
+
+    # Example: respond only if bot is mentioned or message starts with "!"
+    if bot.user.mentioned_in(message) or message.content.startswith("!"):
+        try:
+            full_prompt = f"{prompt_base}\nUser: {message.content}"
+            response = model.generate_content(full_prompt)
+            await message.channel.send(response.text)
+        except Exception as e:
+            await message.channel.send(f"❌ Error: {e}")
 
 bot.run(discord_token)
