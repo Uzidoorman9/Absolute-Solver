@@ -9,6 +9,7 @@ COPY . .
 
 # Install dependencies
 RUN pip install -r requirements.txt
+RUN pip install --upgrade google-generativeai
 
 # Set environment (optional, use Render instead ideally)
 ENV PORT=8080
