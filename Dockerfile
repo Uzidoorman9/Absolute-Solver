@@ -13,6 +13,7 @@ RUN pip install --upgrade google-generativeai
 RUN pip install google-generativeai
 RUN pip install discord.py google-generativeai aiohttp pillow
 RUN pip install google-generativeai
+RUN pip install aiohttp google-generativeai pillow
 
 # Set environment (optional, use Render instead ideally)
 ENV PORT=8080
