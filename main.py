@@ -6,7 +6,7 @@ from discord import app_commands
 import random
 import time
 import aiohttp
-import asyncio  # Added for your async sleeps in generate/analyze commands
+import asyncio
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -26,15 +26,15 @@ TEST_GUILD = discord.Object(id=TEST_GUILD_ID)
 
 start_time = time.time()
 
+# ----------------------
+# UTILITIES
+# ----------------------
+
 @bot.event
 async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
     await tree.sync(guild=TEST_GUILD)
     print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
-
-# ----------------------
-# UTILITIES
-# ----------------------
 
 @tree.command(name="ping", description="Check if bot is alive", guild=TEST_GUILD)
 async def ping(interaction: discord.Interaction):
@@ -426,6 +426,198 @@ async def analyze(interaction: discord.Interaction, text: str):
     await asyncio.sleep(2)
     response_text = f"Analysis of text: {text}"
     await interaction.followup.send(response_text)
+
+# ----------------------
+# MONEY & GAMBLING SYSTEM
+# ----------------------
+
+# In-memory user balances and cooldowns
+user_balances = {}
+cooldowns = {}
+cooldown_time = 5  # seconds cooldown on gambling commands
+gambling_enabled = True
+
+def is_gambling_enabled():
+    return gambling_enabled
+
+def check_cooldown(user_id):
+    last = cooldowns.get(user_id, 0)
+    return time.time() - last >= cooldown_time
+
+def update_cooldown(user_id):
+    cooldowns[user_id] = time.time()
+
+def get_balance(user_id):
+    return user_balances.get(user_id, 0)
+
+def set_balance(user_id, amount):
+    user_balances[user_id] = amount
+
+def change_balance(user_id, amount):
+    user_balances[user_id] = get_balance(user_id) + amount
+
+def gambling_command(func):
+    async def wrapper(interaction: discord.Interaction, *args, **kwargs):
+        if not gambling_enabled:
+            await interaction.response.send_message("❌ Gambling commands are currently disabled.", ephemeral=True)
+            return
+        if not check_cooldown(interaction.user.id):
+            await interaction.response.send_message("⏳ Please wait before using gambling commands again.", ephemeral=True)
+            return
+        update_cooldown(interaction.user.id)
+        await func(interaction, *args, **kwargs)
+    return wrapper
+
+@tree.command(name="balance", description="Check your oil drops balance", guild=TEST_GUILD)
+async def balance(interaction: discord.Interaction):
+    bal = get_balance(interaction.user.id)
+    await interaction.response.send_message(f"💰 You have {bal} oil drops.")
+
+@tree.command(name="give", description="Give oil drops to another user", guild=TEST_GUILD)
+@app_commands.describe(user="User to give to", amount="Amount of oil drops")
+async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        return
+    if get_balance(interaction.user.id) < amount:
+        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+        return
+    if user.bot:
+        await interaction.response.send_message("❌ You cannot give oil drops to bots.", ephemeral=True)
+        return
+    change_balance(interaction.user.id, -amount)
+    change_balance(user.id, amount)
+    await interaction.response.send_message(f"✅ Gave {amount} oil drops to {user.mention}.")
+
+@tree.command(name="daily", description="Claim daily oil drops", guild=TEST_GUILD)
+async def daily(interaction: discord.Interaction):
+    now = time.time()
+    last_claim = cooldowns.get(f"daily_{interaction.user.id}", 0)
+    if now - last_claim < 24*3600:
+        left = int(24*3600 - (now - last_claim))
+        hrs, rem = divmod(left, 3600)
+        mins, sec = divmod(rem, 60)
+        await interaction.response.send_message(f"⏳ You already claimed daily. Come back in {hrs}h {mins}m {sec}s.", ephemeral=True)
+        return
+    cooldowns[f"daily_{interaction.user.id}"] = now
+    amount = random.randint(100, 500)
+    change_balance(interaction.user.id, amount)
+    await interaction.response.send_message(f"🎉 You claimed your daily {amount} oil drops!")
+
+@tree.command(name="gamble", description="Gamble oil drops", guild=TEST_GUILD)
+@app_commands.describe(amount="Amount to gamble")
+@gambling_command
+async def gamble(interaction: discord.Interaction, amount: int):
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        return
+    bal = get_balance(interaction.user.id)
+    if bal < amount:
+        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+        return
+    # 50% chance double, 50% lose
+    if random.random() < 0.5:
+        change_balance(interaction.user.id, amount)
+        await interaction.response.send_message(f"🎉 You won! You gained {amount} oil drops.")
+    else:
+        change_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"😢 You lost {amount} oil drops.")
+
+@tree.command(name="coinflip", description="Bet on coin flip", guild=TEST_GUILD)
+@app_commands.describe(amount="Amount to bet", choice="Heads or Tails")
+@gambling_command
+async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        return
+    bal = get_balance(interaction.user.id)
+    if bal < amount:
+        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+        return
+    choice = choice.lower()
+    if choice not in ["heads", "tails"]:
+        await interaction.response.send_message("❌ Choice must be 'Heads' or 'Tails'.", ephemeral=True)
+        return
+    outcome = random.choice(["heads", "tails"])
+    if outcome == choice:
+        change_balance(interaction.user.id, amount)
+        await interaction.response.send_message(f"🎉 The coin landed on {outcome}! You won {amount} oil drops.")
+    else:
+        change_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"😢 The coin landed on {outcome}. You lost {amount} oil drops.")
+
+@tree.command(name="slots", description="Play slots", guild=TEST_GUILD)
+@app_commands.describe(amount="Amount to bet")
+@gambling_command
+async def slots(interaction: discord.Interaction, amount: int):
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        return
+    bal = get_balance(interaction.user.id)
+    if bal < amount:
+        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+        return
+    symbols = ["🍒", "🍋", "🍊", "⭐", "7️⃣"]
+    result = [random.choice(symbols) for _ in range(3)]
+    if len(set(result)) == 1:
+        payout = amount * 5
+        change_balance(interaction.user.id, payout)
+        await interaction.response.send_message(f"🎰 {' '.join(result)}\nJackpot! You won {payout} oil drops!")
+    elif len(set(result)) == 2:
+        payout = amount * 2
+        change_balance(interaction.user.id, payout)
+        await interaction.response.send_message(f"🎰 {' '.join(result)}\nNice! You won {payout} oil drops!")
+    else:
+        change_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"🎰 {' '.join(result)}\nNo luck. You lost {amount} oil drops.")
+
+@tree.command(name="leaderboard", description="Show top 10 richest users", guild=TEST_GUILD)
+async def leaderboard(interaction: discord.Interaction):
+    if not user_balances:
+        await interaction.response.send_message("No balances yet.")
+        return
+    sorted_bal = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)[:10]
+    embed = discord.Embed(title="🏆 Oil Drops Leaderboard", color=discord.Color.gold())
+    for i, (user_id, bal) in enumerate(sorted_bal, start=1):
+        user = bot.get_user(user_id)
+        name = user.name if user else f"User ID {user_id}"
+        embed.add_field(name=f"{i}. {name}", value=f"{bal} oil drops", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="setbalance", description="Admin: Set user balance", guild=TEST_GUILD)
+@app_commands.describe(user="User to set balance for", amount="New balance")
+async def setbalance(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
+        return
+    if amount < 0:
+        await interaction.response.send_message("❌ Amount cannot be negative.", ephemeral=True)
+        return
+    set_balance(user.id, amount)
+    await interaction.response.send_message(f"✅ Set {user.mention}'s balance to {amount} oil drops.")
+
+@tree.command(name="addbalance", description="Admin: Add oil drops to user", guild=TEST_GUILD)
+@app_commands.describe(user="User to add to", amount="Amount to add")
+async def addbalance(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need admin permissions.", ephemeral=True)
+        return
+    if amount <= 0:
+        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        return
+    change_balance(user.id, amount)
+    await interaction.response.send_message(f"✅ Added {amount} oil drops to {user.mention}.")
+
+@tree.command(name="toggle_gambling", description="Admin: Enable or disable gambling commands", guild=TEST_GUILD)
+@app_commands.describe(enable="Enable or disable gambling")
+async def toggle_gambling(interaction: discord.Interaction, enable: bool):
+    global gambling_enabled
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need admin permissions to do that.", ephemeral=True)
+        return
+    gambling_enabled = enable
+    state = "enabled" if enable else "disabled"
+    await interaction.response.send_message(f"✅ Gambling commands are now {state}.")
 
 # ----------------------
 
