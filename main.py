@@ -1,75 +1,98 @@
 import os
-import subprocess
+import random
+import time
+import asyncio
+import functools
+import aiohttp
 import discord
 from discord.ext import commands
 from discord import app_commands
-import random
-import time
-import aiohttp
-import asyncio
-import functools
 from typing import Callable, Coroutine, Any
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
+# -------- CONFIG & GLOBALS --------
+intents = discord.Intents.all()  # Full intents for max features
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 DISCORD_MANAGER_TOKEN = os.getenv("DISCORD_MANAGER_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-talk_enabled_users = set()
-length_limits = {}
-
 TEST_GUILD_ID = 1388197138487574742
 TEST_GUILD = discord.Object(id=TEST_GUILD_ID)
 
 start_time = time.time()
 
-# --- Money system ---
+# User data stores
 user_balances = {}
 gambling_enabled = True
 gambling_cooldowns = {}
 
+talk_enabled_users = set()
+length_limits = {}
+
+# Gemini and ImageGen API endpoints/config
+# (Stub / placeholders here — replace with actual endpoints/keys)
+
+# -------- UTILS --------
+
 def get_balance(user_id: int) -> int:
-    return user_balances.get(user_id, 1000)  # start users with 1000 oil drops
+    return user_balances.get(user_id, 1000)  # start with 1000 oil drops
 
 def update_balance(user_id: int, amount: int):
     user_balances[user_id] = get_balance(user_id) + amount
 
-def check_cooldown(user_id: int) -> bool:
+def check_cooldown(user_id: int, cd_seconds=5) -> bool:
     now = time.time()
-    if user_id not in gambling_cooldowns or now - gambling_cooldowns[user_id] > 5:
-        return True
-    return False
+    last = gambling_cooldowns.get(user_id, 0)
+    return (now - last) > cd_seconds
 
 def update_cooldown(user_id: int):
     gambling_cooldowns[user_id] = time.time()
+
+def has_perms(interaction: discord.Interaction, perms: list[str]) -> bool:
+    # Check if user has *all* listed permissions
+    user_perms = interaction.user.guild_permissions
+    return all(getattr(user_perms, perm, False) for perm in perms)
+
+def ephemeral_send(interaction, content):
+    return interaction.response.send_message(content, ephemeral=True)
+
+def is_admin(interaction):
+    return interaction.user.guild_permissions.administrator
+
+def requires_perms(perms: list[str]):
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(interaction: discord.Interaction, *args, **kwargs):
+            if not has_perms(interaction, perms):
+                await ephemeral_send(interaction, f"❌ You need the following permissions: {', '.join(perms)}")
+                return
+            await func(interaction, *args, **kwargs)
+        return wrapper
+    return decorator
+
+# -------- DECORATORS --------
 
 def gambling_command(func: Callable[[discord.Interaction, int], Coroutine[Any, Any, None]]):
     @functools.wraps(func)
     async def wrapper(interaction: discord.Interaction, amount: int):
         if not gambling_enabled:
-            await interaction.response.send_message("❌ Gambling commands are currently disabled.", ephemeral=True)
+            await ephemeral_send(interaction, "❌ Gambling is currently disabled.")
             return
         if amount <= 0:
-            await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+            await ephemeral_send(interaction, "❌ Amount must be positive.")
             return
         if get_balance(interaction.user.id) < amount:
-            await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+            await ephemeral_send(interaction, "❌ You don't have enough oil drops.")
             return
         if not check_cooldown(interaction.user.id):
-            await interaction.response.send_message("⏳ Please wait before gambling again.", ephemeral=True)
+            await ephemeral_send(interaction, "⏳ Please wait before gambling again.")
             return
         update_cooldown(interaction.user.id)
         await func(interaction, amount)
     return wrapper
 
-# ----------------------
-# EVENTS
-# ----------------------
+# -------- EVENTS --------
 
 @bot.event
 async def on_ready():
@@ -81,16 +104,14 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot:
         return
-
-    # Talk mode: repeat & delete
+    # Talk mode repeats your messages & deletes yours
     if message.author.id in talk_enabled_users:
         await message.channel.send(message.content)
         try:
             await message.delete()
         except discord.Forbidden:
             pass
-
-    # Length limit enforcement
+    # Length limits enforcement
     guild_id = message.guild.id if message.guild else None
     if guild_id in length_limits:
         limit_info = length_limits[guild_id]
@@ -104,12 +125,9 @@ async def on_message(message):
                 await message.delete()
             except discord.Forbidden:
                 pass
-
     await bot.process_commands(message)
 
-# ----------------------
-# BASIC COMMANDS
-# ----------------------
+# -------- BASIC COMMANDS --------
 
 @tree.command(name="ping", description="Check if bot is alive", guild=TEST_GUILD)
 async def ping(interaction: discord.Interaction):
@@ -173,92 +191,76 @@ async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     embed.set_image(url=user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
 
-# ----------------------
-# MODERATION COMMANDS
-# ----------------------
+# -------- MODERATION --------
 
-@tree.command(name="clear", description="Delete messages in this channel (admin only)", guild=TEST_GUILD)
+@tree.command(name="clear", description="Delete messages (admin only)", guild=TEST_GUILD)
 @app_commands.describe(amount="Number of messages to delete (1-100)")
+@requires_perms(['manage_messages'])
 async def clear(interaction: discord.Interaction, amount: int):
-    if not interaction.user.guild_permissions.manage_messages:
-        await interaction.response.send_message("❌ You need Manage Messages permission.", ephemeral=True)
-        return
     if amount < 1 or amount > 100:
-        await interaction.response.send_message("❌ Amount must be between 1 and 100.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ Amount must be between 1 and 100.")
         return
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.response.send_message(f"🧹 Deleted {len(deleted)} messages.", ephemeral=True)
 
-@tree.command(name="kick", description="Kick a user from the server", guild=TEST_GUILD)
+@tree.command(name="kick", description="Kick a user", guild=TEST_GUILD)
 @app_commands.describe(user="User to kick", reason="Reason for kick")
+@requires_perms(['kick_members'])
 async def kick(interaction: discord.Interaction, user: discord.Member, reason: str = None):
-    if not interaction.user.guild_permissions.kick_members:
-        await interaction.response.send_message("❌ You need Kick Members permission.", ephemeral=True)
-        return
     try:
         await user.kick(reason=reason)
         await interaction.response.send_message(f"👢 Kicked {user} for: {reason or 'No reason provided'}")
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to kick: {e}", ephemeral=True)
+        await ephemeral_send(interaction, f"❌ Failed to kick: {e}")
 
-@tree.command(name="ban", description="Ban a user from the server", guild=TEST_GUILD)
+@tree.command(name="ban", description="Ban a user", guild=TEST_GUILD)
 @app_commands.describe(user="User to ban", reason="Reason for ban")
+@requires_perms(['ban_members'])
 async def ban(interaction: discord.Interaction, user: discord.Member, reason: str = None):
-    if not interaction.user.guild_permissions.ban_members:
-        await interaction.response.send_message("❌ You need Ban Members permission.", ephemeral=True)
-        return
     try:
         await user.ban(reason=reason)
         await interaction.response.send_message(f"🔨 Banned {user} for: {reason or 'No reason provided'}")
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to ban: {e}", ephemeral=True)
+        await ephemeral_send(interaction, f"❌ Failed to ban: {e}")
 
 @tree.command(name="unban", description="Unban a user by ID", guild=TEST_GUILD)
-@app_commands.describe(user_id="ID of user to unban")
+@app_commands.describe(user_id="User ID to unban")
+@requires_perms(['ban_members'])
 async def unban(interaction: discord.Interaction, user_id: int):
-    if not interaction.user.guild_permissions.ban_members:
-        await interaction.response.send_message("❌ You need Ban Members permission.", ephemeral=True)
-        return
     banned_users = await interaction.guild.bans()
     user = discord.utils.find(lambda u: u.user.id == user_id, banned_users)
     if user is None:
-        await interaction.response.send_message("❌ User not found in ban list.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ User not found in ban list.")
         return
     try:
         await interaction.guild.unban(user.user)
         await interaction.response.send_message(f"✅ Unbanned {user.user}")
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to unban: {e}", ephemeral=True)
+        await ephemeral_send(interaction, f"❌ Failed to unban: {e}")
 
-@tree.command(name="mute", description="Timeout a user (mute)", guild=TEST_GUILD)
+@tree.command(name="mute", description="Timeout a user", guild=TEST_GUILD)
 @app_commands.describe(user="User to timeout", duration="Duration in seconds")
+@requires_perms(['moderate_members'])
 async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
-    if not interaction.user.guild_permissions.moderate_members:
-        await interaction.response.send_message("❌ You need Moderate Members permission.", ephemeral=True)
-        return
     try:
         await user.timeout(duration=duration)
         await interaction.response.send_message(f"🔇 Timed out {user} for {duration} seconds.")
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to timeout: {e}", ephemeral=True)
+        await ephemeral_send(interaction, f"❌ Failed to timeout: {e}")
 
-@tree.command(name="unmute", description="Remove timeout from a user", guild=TEST_GUILD)
+@tree.command(name="unmute", description="Remove timeout", guild=TEST_GUILD)
 @app_commands.describe(user="User to remove timeout from")
+@requires_perms(['moderate_members'])
 async def unmute(interaction: discord.Interaction, user: discord.Member):
-    if not interaction.user.guild_permissions.moderate_members:
-        await interaction.response.send_message("❌ You need Moderate Members permission.", ephemeral=True)
-        return
     try:
         await user.timeout(None)
         await interaction.response.send_message(f"🔈 Removed timeout from {user}.")
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to remove timeout: {e}", ephemeral=True)
+        await ephemeral_send(interaction, f"❌ Failed to remove timeout: {e}")
 
-# ----------------------
-# FUN COMMANDS
-# ----------------------
+# -------- FUN --------
 
-@tree.command(name="roll", description="Roll a dice (1-100)", guild=TEST_GUILD)
+@tree.command(name="roll", description="Roll a dice 1-100", guild=TEST_GUILD)
 async def roll(interaction: discord.Interaction):
     result = random.randint(1, 100)
     await interaction.response.send_message(f"🎲 You rolled: {result}")
@@ -268,7 +270,7 @@ async def flip(interaction: discord.Interaction):
     result = random.choice(["Heads", "Tails"])
     await interaction.response.send_message(f"🪙 The coin landed on: {result}")
 
-@tree.command(name="8ball", description="Ask the magic 8-ball a question", guild=TEST_GUILD)
+@tree.command(name="8ball", description="Magic 8-ball answers", guild=TEST_GUILD)
 @app_commands.describe(question="Your question")
 async def eight_ball(interaction: discord.Interaction, question: str):
     responses = [
@@ -278,7 +280,7 @@ async def eight_ball(interaction: discord.Interaction, question: str):
     answer = random.choice(responses)
     await interaction.response.send_message(f"🎱 Question: {question}\nAnswer: {answer}")
 
-@tree.command(name="joke", description="Get a random programming joke", guild=TEST_GUILD)
+@tree.command(name="joke", description="Get a programming joke", guild=TEST_GUILD)
 async def joke(interaction: discord.Interaction):
     jokes = [
         "Why do programmers prefer dark mode? Because light attracts bugs!",
@@ -288,7 +290,7 @@ async def joke(interaction: discord.Interaction):
     ]
     await interaction.response.send_message(random.choice(jokes))
 
-@tree.command(name="meme", description="Get a random meme", guild=TEST_GUILD)
+@tree.command(name="meme", description="Get a random meme image", guild=TEST_GUILD)
 async def meme(interaction: discord.Interaction):
     memes = [
         "https://i.imgur.com/w3duR07.png",
@@ -299,7 +301,7 @@ async def meme(interaction: discord.Interaction):
     await interaction.response.send_message(random.choice(memes))
 
 @tree.command(name="say", description="Make the bot say something", guild=TEST_GUILD)
-@app_commands.describe(message="What the bot should say")
+@app_commands.describe(message="Message to say")
 async def say(interaction: discord.Interaction, message: str):
     await interaction.response.defer()
     await interaction.delete_original_response()
@@ -321,11 +323,9 @@ async def dog(interaction: discord.Interaction):
             url = data['message']
             await interaction.response.send_message(url)
 
-# ----------------------
-# TALK MODE & LENGTH LIMITS
-# ----------------------
+# -------- TALK MODE & LENGTH LIMITS --------
 
-@tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes yours.", guild=TEST_GUILD)
+@tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF", guild=TEST_GUILD)
 async def talk_toggle(interaction: discord.Interaction):
     uid = interaction.user.id
     if uid in talk_enabled_users:
@@ -335,23 +335,16 @@ async def talk_toggle(interaction: discord.Interaction):
         talk_enabled_users.add(uid)
         await interaction.response.send_message("✅ Talk mode enabled.", ephemeral=True)
 
-@tree.command(name="length", description="Set chat length limit and character name.", guild=TEST_GUILD)
-@app_commands.describe(
-    max_length="Max characters per message",
-    character="Character name users should roleplay as"
-)
+@tree.command(name="length", description="Set chat length limit and character", guild=TEST_GUILD)
+@app_commands.describe(max_length="Max characters per message", character="Character name")
 async def set_length(interaction: discord.Interaction, max_length: int, character: str):
     if max_length <= 0:
-        await interaction.response.send_message("❌ Max length must be positive.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ Max length must be positive.")
         return
     length_limits[interaction.guild_id] = {"max_len": max_length, "character": character}
-    await interaction.response.send_message(
-        f"✅ Chat length limit set to {max_length}. Users must roleplay as **{character}**."
-    )
+    await interaction.response.send_message(f"✅ Chat length limit set to {max_length}. Roleplay as **{character}**.")
 
-# ----------------------
-# GAMBLING COMMANDS
-# ----------------------
+# -------- GAMBLING --------
 
 @tree.command(name="balance", description="Check your oil drops balance", guild=TEST_GUILD)
 async def balance(interaction: discord.Interaction):
@@ -359,37 +352,37 @@ async def balance(interaction: discord.Interaction):
     await interaction.response.send_message(f"🛢️ You have {bal} oil drops.")
 
 @tree.command(name="give", description="Give oil drops to another user", guild=TEST_GUILD)
-@app_commands.describe(user="User to give oil drops to", amount="Amount to give")
+@app_commands.describe(user="User to give to", amount="Amount to give")
 async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
     if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ Amount must be positive.")
         return
     if get_balance(interaction.user.id) < amount:
-        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ You don't have enough oil drops.")
         return
     update_balance(interaction.user.id, -amount)
     update_balance(user.id, amount)
     await interaction.response.send_message(f"✅ Gave {amount} oil drops to {user.mention}.")
 
-@tree.command(name="gamble", description="Gamble your oil drops (win or lose)", guild=TEST_GUILD)
+@tree.command(name="gamble", description="Gamble your oil drops", guild=TEST_GUILD)
 @gambling_command
 async def gamble(interaction: discord.Interaction, amount: int):
     win = random.random() < 0.5
     if win:
         winnings = amount
         update_balance(interaction.user.id, winnings)
-        await interaction.response.send_message(f"🎉 You won {winnings} oil drops! 🎉")
+        await interaction.response.send_message(f"🎉 You won {winnings} oil drops!")
     else:
         update_balance(interaction.user.id, -amount)
-        await interaction.response.send_message(f"😢 You lost {amount} oil drops. Better luck next time!")
+        await interaction.response.send_message(f"💥 You lost {amount} oil drops!")
 
-@tree.command(name="slots", description="Play slots to win oil drops", guild=TEST_GUILD)
+@tree.command(name="slot", description="Play the slot machine", guild=TEST_GUILD)
 @gambling_command
-async def slots(interaction: discord.Interaction, amount: int):
-    symbols = ["🍒", "🍋", "🍊", "🍉", "7️⃣", "⭐"]
+async def slot(interaction: discord.Interaction, amount: int):
+    symbols = ["🍒", "🍋", "🍊", "🍉", "⭐", "7️⃣"]
     result = [random.choice(symbols) for _ in range(3)]
     await interaction.response.defer()
-    await asyncio.sleep(1)  # suspense
+    await asyncio.sleep(1)
     if len(set(result)) == 1:
         winnings = amount * 5
         update_balance(interaction.user.id, winnings)
@@ -407,16 +400,16 @@ async def slots(interaction: discord.Interaction, amount: int):
 async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
     choice = choice.lower()
     if choice not in ["heads", "tails"]:
-        await interaction.response.send_message("❌ Choice must be 'heads' or 'tails'.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ Choice must be 'heads' or 'tails'.")
         return
     if amount <= 0:
-        await interaction.response.send_message("❌ Amount must be positive.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ Amount must be positive.")
         return
     if get_balance(interaction.user.id) < amount:
-        await interaction.response.send_message("❌ You don't have enough oil drops.", ephemeral=True)
+        await ephemeral_send(interaction, "❌ You don't have enough oil drops.")
         return
     if not check_cooldown(interaction.user.id):
-        await interaction.response.send_message("⏳ Please wait before gambling again.", ephemeral=True)
+        await ephemeral_send(interaction, "⏳ Please wait before gambling again.")
         return
     update_cooldown(interaction.user.id)
 
@@ -429,23 +422,96 @@ async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
         update_balance(interaction.user.id, -amount)
         await interaction.response.send_message(f"🪙 The coin landed on **{flip_result.capitalize()}**. You lost {amount} oil drops.")
 
-# ----------------------
-# ADMIN TOGGLES
-# ----------------------
-
 @tree.command(name="toggle_gambling", description="Enable or disable gambling commands (admin only)", guild=TEST_GUILD)
+@requires_perms(['administrator'])
 async def toggle_gambling(interaction: discord.Interaction):
     global gambling_enabled
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need Administrator permission.", ephemeral=True)
-        return
     gambling_enabled = not gambling_enabled
     status = "enabled" if gambling_enabled else "disabled"
     await interaction.response.send_message(f"🎲 Gambling commands are now {status}.")
 
-# ----------------------
-# MAIN STARTUP
-# ----------------------
+# -------- IMAGE GENERATION (STABLE DIFFUSION style) --------
+
+@tree.command(name="imagine", description="Generate an image from a prompt", guild=TEST_GUILD)
+@app_commands.describe(prompt="Describe the image you want")
+async def imagine(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+    # Dummy implementation for example; replace with your actual API call
+    # Let's simulate image generation URL
+    image_url = f"https://dummyimage.com/512x512/000/fff&text={prompt.replace(' ', '+')}"
+    await asyncio.sleep(2)  # simulate processing time
+    embed = discord.Embed(title="Your AI-generated image")
+    embed.set_image(url=image_url)
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="editimage", description="Edit an existing image by URL", guild=TEST_GUILD)
+@app_commands.describe(image_url="URL of the image to edit", prompt="Edit description")
+async def editimage(interaction: discord.Interaction, image_url: str, prompt: str):
+    await interaction.response.defer()
+    # Dummy placeholder
+    edited_url = f"https://dummyimage.com/512x512/333/fff&text=Edit+{prompt.replace(' ', '+')}"
+    await asyncio.sleep(2)
+    embed = discord.Embed(title="Edited Image")
+    embed.set_image(url=edited_url)
+    await interaction.followup.send(embed=embed)
+
+# -------- IMAGE CAPTIONING AND DETECTION (Gemini powered) --------
+
+@tree.command(name="describeimage", description="Describe an image from a URL", guild=TEST_GUILD)
+@app_commands.describe(image_url="URL of the image to describe")
+async def describeimage(interaction: discord.Interaction, image_url: str):
+    await interaction.response.defer()
+    # Dummy placeholder
+    description = "A beautiful sunset over the mountains with vibrant colors."
+    await asyncio.sleep(1)
+    await interaction.followup.send(f"🖼️ Description: {description}")
+
+@tree.command(name="detectobjects", description="Detect objects in an image", guild=TEST_GUILD)
+@app_commands.describe(image_url="URL of the image to analyze")
+async def detectobjects(interaction: discord.Interaction, image_url: str):
+    await interaction.response.defer()
+    # Dummy placeholder
+    objects = ["tree", "river", "bird", "cloud"]
+    await asyncio.sleep(1)
+    await interaction.followup.send(f"🔍 Objects detected: {', '.join(objects)}")
+
+# -------- CREATIVE TEXT GENERATORS --------
+
+@tree.command(name="story", description="Generate a short story", guild=TEST_GUILD)
+@app_commands.describe(prompt="Story prompt")
+async def story(interaction: discord.Interaction, prompt: str):
+    await interaction.response.defer()
+    # Dummy placeholder
+    story_text = f"Once upon a time, {prompt}... And then something amazing happened!"
+    await asyncio.sleep(1)
+    await interaction.followup.send(f"📖 {story_text}")
+
+@tree.command(name="poem", description="Generate a poem", guild=TEST_GUILD)
+@app_commands.describe(topic="Topic for the poem")
+async def poem(interaction: discord.Interaction, topic: str):
+    await interaction.response.defer()
+    # Dummy placeholder
+    poem_text = f"Roses are red, violets are blue, here’s a poem about {topic}, just for you."
+    await asyncio.sleep(1)
+    await interaction.followup.send(f"📜 {poem_text}")
+
+# -------- ADMIN COMMANDS --------
+
+@tree.command(name="reload", description="Reload bot commands (admin only)", guild=TEST_GUILD)
+@requires_perms(['administrator'])
+async def reload_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("🔄 Reloading commands...")
+    await tree.sync(guild=TEST_GUILD)
+    await interaction.followup.send("✅ Commands reloaded.")
+
+# -------- ERROR HANDLING --------
+
+@bot.event
+async def on_app_command_error(interaction: discord.Interaction, error):
+    # Send a user-friendly error message
+    await interaction.response.send_message(f"❌ Error: {str(error)}", ephemeral=True)
+
+# -------- RUN --------
 
 if __name__ == "__main__":
     if not DISCORD_MANAGER_TOKEN:
