@@ -6,6 +6,7 @@ from discord import app_commands
 import random
 import time
 import aiohttp
+import asyncio  # Added for your async sleeps in generate/analyze commands
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -21,38 +22,38 @@ talk_enabled_users = set()
 length_limits = {}
 
 TEST_GUILD_ID = 1388197138487574742
+TEST_GUILD = discord.Object(id=TEST_GUILD_ID)
 
 start_time = time.time()
 
 @bot.event
 async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
-    guild = discord.Object(id=TEST_GUILD_ID)
-    await tree.sync(guild=guild)
+    await tree.sync(guild=TEST_GUILD)
     print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
 
 # ----------------------
 # UTILITIES
 # ----------------------
 
-@tree.command(name="ping", description="Check if bot is alive")
+@tree.command(name="ping", description="Check if bot is alive", guild=TEST_GUILD)
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("🏓 Pong!")
 
-@tree.command(name="uptime", description="Show how long the bot has been running")
+@tree.command(name="uptime", description="Show how long the bot has been running", guild=TEST_GUILD)
 async def uptime(interaction: discord.Interaction):
     elapsed = int(time.time() - start_time)
     hours, rem = divmod(elapsed, 3600)
     minutes, seconds = divmod(rem, 60)
     await interaction.response.send_message(f"⏳ Uptime: {hours}h {minutes}m {seconds}s")
 
-@tree.command(name="invite", description="Get invite link for this bot")
+@tree.command(name="invite", description="Get invite link for this bot", guild=TEST_GUILD)
 async def invite(interaction: discord.Interaction):
     client_id = bot.user.id
     invite_url = f"https://discord.com/oauth2/authorize?client_id={client_id}&permissions=274877991936&scope=bot%20applications.commands"
     await interaction.response.send_message(f"🔗 Invite me with: {invite_url}")
 
-@tree.command(name="botinfo", description="Information about this bot")
+@tree.command(name="botinfo", description="Information about this bot", guild=TEST_GUILD)
 async def botinfo(interaction: discord.Interaction):
     users = sum(g.member_count for g in bot.guilds)
     embed = discord.Embed(title="Bot Info", color=discord.Color.purple())
@@ -63,7 +64,7 @@ async def botinfo(interaction: discord.Interaction):
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="userinfo", description="Get info about a user")
+@tree.command(name="userinfo", description="Get info about a user", guild=TEST_GUILD)
 @app_commands.describe(user="User to look up")
 async def userinfo(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
@@ -76,7 +77,7 @@ async def userinfo(interaction: discord.Interaction, user: discord.Member = None
     embed.add_field(name="Account Created", value=user.created_at.strftime("%Y-%m-%d %H:%M:%S"))
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="serverinfo", description="Get info about the server")
+@tree.command(name="serverinfo", description="Get info about the server", guild=TEST_GUILD)
 async def serverinfo(interaction: discord.Interaction):
     guild = interaction.guild
     embed = discord.Embed(title=f"Server Info - {guild.name}", color=discord.Color.green())
@@ -88,7 +89,7 @@ async def serverinfo(interaction: discord.Interaction):
     embed.add_field(name="Created At", value=guild.created_at.strftime("%Y-%m-%d %H:%M:%S"))
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="avatar", description="Show a user's avatar")
+@tree.command(name="avatar", description="Show a user's avatar", guild=TEST_GUILD)
 @app_commands.describe(user="User to show avatar of")
 async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
@@ -100,7 +101,7 @@ async def avatar(interaction: discord.Interaction, user: discord.Member = None):
 # MODERATION
 # ----------------------
 
-@tree.command(name="clear", description="Delete messages in this channel (admin only)")
+@tree.command(name="clear", description="Delete messages in this channel (admin only)", guild=TEST_GUILD)
 @app_commands.describe(amount="Number of messages to delete (1-100)")
 async def clear(interaction: discord.Interaction, amount: int):
     if not interaction.user.guild_permissions.manage_messages:
@@ -112,7 +113,7 @@ async def clear(interaction: discord.Interaction, amount: int):
     deleted = await interaction.channel.purge(limit=amount)
     await interaction.response.send_message(f"🧹 Deleted {len(deleted)} messages.", ephemeral=True)
 
-@tree.command(name="kick", description="Kick a user from the server")
+@tree.command(name="kick", description="Kick a user from the server", guild=TEST_GUILD)
 @app_commands.describe(user="User to kick", reason="Reason for kick")
 async def kick(interaction: discord.Interaction, user: discord.Member, reason: str = None):
     if not interaction.user.guild_permissions.kick_members:
@@ -124,7 +125,7 @@ async def kick(interaction: discord.Interaction, user: discord.Member, reason: s
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to kick: {e}", ephemeral=True)
 
-@tree.command(name="ban", description="Ban a user from the server")
+@tree.command(name="ban", description="Ban a user from the server", guild=TEST_GUILD)
 @app_commands.describe(user="User to ban", reason="Reason for ban")
 async def ban(interaction: discord.Interaction, user: discord.Member, reason: str = None):
     if not interaction.user.guild_permissions.ban_members:
@@ -136,7 +137,7 @@ async def ban(interaction: discord.Interaction, user: discord.Member, reason: st
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to ban: {e}", ephemeral=True)
 
-@tree.command(name="unban", description="Unban a user by ID")
+@tree.command(name="unban", description="Unban a user by ID", guild=TEST_GUILD)
 @app_commands.describe(user_id="ID of user to unban")
 async def unban(interaction: discord.Interaction, user_id: int):
     if not interaction.user.guild_permissions.ban_members:
@@ -153,7 +154,7 @@ async def unban(interaction: discord.Interaction, user_id: int):
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to unban: {e}", ephemeral=True)
 
-@tree.command(name="mute", description="Timeout a user (mute)")
+@tree.command(name="mute", description="Timeout a user (mute)", guild=TEST_GUILD)
 @app_commands.describe(user="User to timeout", duration="Duration in seconds")
 async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
     if not interaction.user.guild_permissions.moderate_members:
@@ -165,7 +166,7 @@ async def mute(interaction: discord.Interaction, user: discord.Member, duration:
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to timeout: {e}", ephemeral=True)
 
-@tree.command(name="unmute", description="Remove timeout from a user")
+@tree.command(name="unmute", description="Remove timeout from a user", guild=TEST_GUILD)
 @app_commands.describe(user="User to remove timeout from")
 async def unmute(interaction: discord.Interaction, user: discord.Member):
     if not interaction.user.guild_permissions.moderate_members:
@@ -181,17 +182,17 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
 # FUN COMMANDS
 # ----------------------
 
-@tree.command(name="roll", description="Roll a dice (1-100)")
+@tree.command(name="roll", description="Roll a dice (1-100)", guild=TEST_GUILD)
 async def roll(interaction: discord.Interaction):
     result = random.randint(1, 100)
     await interaction.response.send_message(f"🎲 You rolled: {result}")
 
-@tree.command(name="flip", description="Flip a coin")
+@tree.command(name="flip", description="Flip a coin", guild=TEST_GUILD)
 async def flip(interaction: discord.Interaction):
     result = random.choice(["Heads", "Tails"])
     await interaction.response.send_message(f"🪙 The coin landed on: {result}")
 
-@tree.command(name="8ball", description="Ask the magic 8-ball a question")
+@tree.command(name="8ball", description="Ask the magic 8-ball a question", guild=TEST_GUILD)
 @app_commands.describe(question="Your question")
 async def eight_ball(interaction: discord.Interaction, question: str):
     responses = [
@@ -201,7 +202,7 @@ async def eight_ball(interaction: discord.Interaction, question: str):
     answer = random.choice(responses)
     await interaction.response.send_message(f"🎱 Question: {question}\nAnswer: {answer}")
 
-@tree.command(name="joke", description="Get a random programming joke")
+@tree.command(name="joke", description="Get a random programming joke", guild=TEST_GUILD)
 async def joke(interaction: discord.Interaction):
     jokes = [
         "Why do programmers prefer dark mode? Because light attracts bugs!",
@@ -211,7 +212,7 @@ async def joke(interaction: discord.Interaction):
     ]
     await interaction.response.send_message(random.choice(jokes))
 
-@tree.command(name="meme", description="Get a random meme")
+@tree.command(name="meme", description="Get a random meme", guild=TEST_GUILD)
 async def meme(interaction: discord.Interaction):
     memes = [
         "https://i.imgur.com/w3duR07.png",
@@ -221,14 +222,14 @@ async def meme(interaction: discord.Interaction):
     ]
     await interaction.response.send_message(random.choice(memes))
 
-@tree.command(name="say", description="Make the bot say something")
+@tree.command(name="say", description="Make the bot say something", guild=TEST_GUILD)
 @app_commands.describe(message="What the bot should say")
 async def say(interaction: discord.Interaction, message: str):
     await interaction.response.defer()
     await interaction.delete_original_response()
     await interaction.channel.send(message)
 
-@tree.command(name="cat", description="Get a random cat picture")
+@tree.command(name="cat", description="Get a random cat picture", guild=TEST_GUILD)
 async def cat(interaction: discord.Interaction):
     async with aiohttp.ClientSession() as session:
         async with session.get("https://api.thecatapi.com/v1/images/search") as resp:
@@ -236,7 +237,7 @@ async def cat(interaction: discord.Interaction):
             url = data[0]['url']
             await interaction.response.send_message(url)
 
-@tree.command(name="dog", description="Get a random dog picture")
+@tree.command(name="dog", description="Get a random dog picture", guild=TEST_GUILD)
 async def dog(interaction: discord.Interaction):
     async with aiohttp.ClientSession() as session:
         async with session.get("https://dog.ceo/api/breeds/image/random") as resp:
@@ -248,7 +249,7 @@ async def dog(interaction: discord.Interaction):
 # TALK MODE & LENGTH LIMITS
 # ----------------------
 
-@tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes yours.")
+@tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes yours.", guild=TEST_GUILD)
 async def talk_toggle(interaction: discord.Interaction):
     uid = interaction.user.id
     if uid in talk_enabled_users:
@@ -258,7 +259,7 @@ async def talk_toggle(interaction: discord.Interaction):
         talk_enabled_users.add(uid)
         await interaction.response.send_message("✅ Talk mode enabled.", ephemeral=True)
 
-@tree.command(name="length", description="Set chat length limit and character name.")
+@tree.command(name="length", description="Set chat length limit and character name.", guild=TEST_GUILD)
 @app_commands.describe(
     max_length="Max characters per message",
     character="Character name users should roleplay as"
@@ -307,7 +308,7 @@ async def on_message(message):
 # SPAWN CHILD BOT
 # ----------------------
 
-@tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.")
+@tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.", guild=TEST_GUILD)
 @app_commands.describe(
     prompt="The personality or behavior prompt for the chatbot",
     token="The Discord token of the bot to turn into a chatbot"
@@ -378,57 +379,54 @@ fun_actions_gifs = {
         ],
     },
     "pat": {
-        "texts": ["pats", "gently pats", "gives a friendly pat to", "softly pats"],
+        "texts": ["pats", "gently pats", "gives a pat to", "softly pats"],
         "gifs": [
-            "https://media.giphy.com/media/4HP0ddZnNVvKU/giphy.gif",
-            "https://media.giphy.com/media/L2z7DnOduqEow/giphy.gif",
+            "https://media.giphy.com/media/ye7OTQgwmVuVy/giphy.gif",
+            "https://media.giphy.com/media/L2z7dnOduqEow/giphy.gif",
             "https://media.giphy.com/media/109ltuoSQT212w/giphy.gif"
         ],
-    }
+    },
 }
 
 def create_interaction_command(action_name):
-    @tree.command(name=action_name, description=f"{action_name.capitalize()} a user with a fun GIF")
+    @tree.command(name=action_name, description=f"{action_name.capitalize()} a user with a fun GIF", guild=TEST_GUILD)
     @app_commands.describe(user="User to interact with")
     async def command(interaction: discord.Interaction, user: discord.Member):
-        if user.id == interaction.user.id:
-            await interaction.response.send_message("You can't do this action to yourself! 🤨", ephemeral=True)
-            return
-        data = fun_actions_gifs[action_name]
-        text = random.choice(data["texts"])
-        gif_url = random.choice(data["gifs"])
+        gifs = fun_actions_gifs[action_name]["gifs"]
+        texts = fun_actions_gifs[action_name]["texts"]
+        gif = random.choice(gifs)
+        text = random.choice(texts)
         msg = f"{interaction.user.mention} {text} {user.mention}!"
-        embed = discord.Embed(description=msg, color=discord.Color.blurple())
-        embed.set_image(url=gif_url)
+        embed = discord.Embed(description=msg, color=discord.Color.random())
+        embed.set_image(url=gif)
         await interaction.response.send_message(embed=embed)
     return command
 
-for act in fun_actions_gifs.keys():
-    create_interaction_command(act)
+for action in fun_actions_gifs.keys():
+    create_interaction_command(action)
 
 # ----------------------
-# IMAGE GENERATION & ANALYSIS
+# GOOGLE GEMINI PLACEHOLDER (replace with your actual Gemini usage)
 # ----------------------
 
-@tree.command(name="generate", description="Generate an image with Stable Diffusion (mock placeholder)")
-@app_commands.describe(prompt="Describe the image you want")
+@tree.command(name="generate", description="Generate text with Gemini", guild=TEST_GUILD)
+@app_commands.describe(prompt="Prompt to generate text from")
 async def generate(interaction: discord.Interaction, prompt: str):
-    # TODO: Replace with real Stable Diffusion API integration
     await interaction.response.defer()
-    await asyncio.sleep(2)
-    await interaction.followup.send(f"🖼️ (Mock) Generated image for: {prompt}\nhttps://via.placeholder.com/512.png?text=Generated+Image")
+    # Dummy example for generation - replace with actual Gemini API call
+    await asyncio.sleep(2)  # simulate API latency
+    response_text = f"Generated response for prompt: {prompt}"
+    await interaction.followup.send(response_text)
 
-@tree.command(name="analyze", description="Analyze an image using Gemini (mock placeholder)")
-@app_commands.describe(image_url="Image URL to analyze")
-async def analyze(interaction: discord.Interaction, image_url: str):
-    # TODO: Replace with real Gemini API integration
+@tree.command(name="analyze", description="Analyze text with Gemini", guild=TEST_GUILD)
+@app_commands.describe(text="Text to analyze")
+async def analyze(interaction: discord.Interaction, text: str):
     await interaction.response.defer()
+    # Dummy example for analyze - replace with actual Gemini API call
     await asyncio.sleep(2)
-    await interaction.followup.send(f"🔍 (Mock) Analyzed image: {image_url}\nDescription: This image likely contains objects or people.")
+    response_text = f"Analysis of text: {text}"
+    await interaction.followup.send(response_text)
 
-@tree.command(name="reverse_image", description="Reverse search an image (mock placeholder)")
-@app_commands.describe(image_url="Image URL to search")
-async def reverse_image(interaction: discord.Interaction, image_url: str):
-    await interaction.response.send_message(f"🔁 (Mock) Reverse image search for {image_url}:\nPossibly matches known meme or photo")
+# ----------------------
 
 bot.run(DISCORD_MANAGER_TOKEN)
