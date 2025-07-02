@@ -10,7 +10,7 @@ from discord import app_commands
 from typing import Callable, Coroutine, Any
 
 # -------- CONFIG & GLOBALS --------
-intents = discord.Intents.all()  # Full intents for max features including members
+intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -23,18 +23,16 @@ TEST_GUILD = discord.Object(id=TEST_GUILD_ID)
 start_time = time.time()
 
 # User data stores
-user_balances = {}  # user_id -> oil drops (keep synced with user_data)
+user_balances = {}
 gambling_enabled = True
 gambling_cooldowns = {}
 
 talk_enabled_users = set()
 length_limits = {}
 
-# ----- NEW USER DATA for Murder Drones leveling system -----
-# Structure: user_id -> { 'oil': int, 'xp': int, 'level': int, 'inventory': dict[item_name -> qty] }
+# User data for leveling & inventory
 user_data = {}
 
-# Define Murder Drones themed roles by level
 level_roles = [
     (0, "Worker Drone"),
     (5, "Disassembly Drone"),
@@ -46,7 +44,6 @@ level_roles = [
 
 OIL_GOD_ROLE_NAME = "Oil God"
 
-# Shop items: name -> dict with price and xp gained on eating
 shop_items = {
     "worker_drone_limb": {"price": 500, "xp": 5, "desc": "A severed Worker Drone limb."},
     "murder_drone_eye": {"price": 1500, "xp": 20, "desc": "A glowing eye from a Murder Drone."},
@@ -54,12 +51,12 @@ shop_items = {
     "solver_brain_chip": {"price": 3000, "xp": 40, "desc": "A brain chip from The Solver."},
 }
 
+# -------- UTILITIES --------
 def xp_to_next_level(level: int) -> int:
     return 100 + level * 50
 
 def get_user_data(user_id: int):
     if user_id not in user_data:
-        # Initialize with 1000 oil by default
         user_data[user_id] = {
             "oil": 1000,
             "xp": 0,
@@ -73,13 +70,11 @@ def update_oil_balance(user_id: int, amount: int):
     ud["oil"] += amount
     if ud["oil"] < 0:
         ud["oil"] = 0
-    user_balances[user_id] = ud["oil"]  # keep balances synced
+    user_balances[user_id] = ud["oil"]
 
 async def update_roles(member: discord.Member):
     ud = get_user_data(member.id)
     level = ud["level"]
-
-    # Determine highest role for current level
     role_name = None
     for lvl_req, name in reversed(level_roles):
         if level >= lvl_req:
@@ -93,7 +88,7 @@ async def update_roles(member: discord.Member):
     if role is None:
         role = await guild.create_role(name=role_name, reason="Level role auto-created")
 
-    # Remove other Murder Drones roles
+    # Remove other Murder Drones level roles
     roles_to_remove = [discord.utils.get(guild.roles, name=r[1]) for r in level_roles if discord.utils.get(guild.roles, name=r[1]) in member.roles]
     for r in roles_to_remove:
         if r != role:
@@ -103,74 +98,20 @@ async def update_roles(member: discord.Member):
         await member.add_roles(role)
 
 async def update_oil_god_role(guild: discord.Guild):
-    # Find top oil holder
     if not user_balances:
         return
     top_user_id = max(user_balances, key=lambda uid: user_balances.get(uid, 0))
     top_member = guild.get_member(top_user_id)
     if top_member is None:
         return
-
     role = discord.utils.get(guild.roles, name=OIL_GOD_ROLE_NAME)
     if role is None:
         role = await guild.create_role(name=OIL_GOD_ROLE_NAME, colour=discord.Colour.gold(), reason="Oil God role auto-created")
-
-    # Remove Oil God from others
     for member in guild.members:
         if role in member.roles and member != top_member:
             await member.remove_roles(role)
-    # Add to top member if not already
     if role not in top_member.roles:
         await top_member.add_roles(role)
-
-# -------- EVENTS --------
-
-@bot.event
-async def on_ready():
-    print(f"✅ Manager bot logged in as {bot.user}")
-    await tree.sync(guild=TEST_GUILD)
-    print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    # Give Worker Drone role to everyone when they join
-    guild = member.guild
-    role = discord.utils.get(guild.roles, name="Worker Drone")
-    if role is None:
-        role = await guild.create_role(name="Worker Drone", reason="Worker Drone role auto-created")
-    await member.add_roles(role)
-    # Initialize user data
-    get_user_data(member.id)
-    update_oil_balance(member.id, 0)  # ensure sync with user_balances
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-    # Talk mode repeats your messages & deletes yours
-    if message.author.id in talk_enabled_users:
-        await message.channel.send(message.content)
-        try:
-            await message.delete()
-        except discord.Forbidden:
-            pass
-    # Length limits enforcement
-    guild_id = message.guild.id if message.guild else None
-    if guild_id in length_limits:
-        limit_info = length_limits[guild_id]
-        max_len = limit_info["max_len"]
-        character = limit_info["character"]
-        if len(message.content) > max_len:
-            await message.channel.send(
-                f"⚠️ Your message is too long! Please keep it under {max_len} characters and stay in character as **{character}**."
-            )
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                pass
-    await bot.process_commands(message)
-
-# -------- UTILS --------
 
 def get_balance(user_id: int) -> int:
     ud = get_user_data(user_id)
@@ -201,7 +142,7 @@ def requires_perms(perms: list[str]):
             if not has_perms(interaction, perms):
                 await ephemeral_send(interaction, f"❌ You need the following permissions: {', '.join(perms)}")
                 return
-            await func(interaction, *args, **kwargs)
+            return await func(interaction, *args, **kwargs)
         return wrapper
     return decorator
 
@@ -224,7 +165,52 @@ def gambling_command(func: Callable[[discord.Interaction, int], Coroutine[Any, A
         await func(interaction, amount)
     return wrapper
 
+# -------- EVENTS --------
+
+@bot.event
+async def on_ready():
+    print(f"✅ Manager bot logged in as {bot.user}")
+    await tree.sync(guild=TEST_GUILD)
+    print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    guild = member.guild
+    role = discord.utils.get(guild.roles, name="Worker Drone")
+    if role is None:
+        role = await guild.create_role(name="Worker Drone", reason="Worker Drone role auto-created")
+    await member.add_roles(role)
+    get_user_data(member.id)
+    update_oil_balance(member.id, 0)
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    if message.author.id in talk_enabled_users:
+        await message.channel.send(message.content)
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            pass
+    guild_id = message.guild.id if message.guild else None
+    if guild_id in length_limits:
+        limit_info = length_limits[guild_id]
+        max_len = limit_info["max_len"]
+        character = limit_info["character"]
+        if len(message.content) > max_len:
+            await message.channel.send(
+                f"⚠️ Your message is too long! Please keep it under {max_len} characters and stay in character as **{character}**."
+            )
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                pass
+    await bot.process_commands(message)
+
 # -------- COMMANDS --------
+
+# -- Basic commands --
 
 @tree.command(name="ping", description="Check if bot is alive", guild=TEST_GUILD)
 async def ping(interaction: discord.Interaction):
@@ -240,7 +226,7 @@ async def uptime(interaction: discord.Interaction):
 @tree.command(name="invite", description="Get invite link for this bot", guild=TEST_GUILD)
 async def invite(interaction: discord.Interaction):
     client_id = bot.user.id
-    perms = 274877991936  # all permissions, adjust if you want
+    perms = 274877991936
     invite_url = f"https://discord.com/oauth2/authorize?client_id={client_id}&permissions={perms}&scope=bot%20applications.commands"
     await interaction.response.send_message(f"🔗 Invite me with: {invite_url}")
 
@@ -287,6 +273,8 @@ async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     embed = discord.Embed(title=f"{user}'s Avatar")
     embed.set_image(url=user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
+
+# -- Moderation commands --
 
 @tree.command(name="clear", description="Delete messages (admin only)", guild=TEST_GUILD)
 @app_commands.describe(amount="Number of messages to delete (1-100)")
@@ -353,181 +341,232 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
     except Exception as e:
         await ephemeral_send(interaction, f"❌ Failed to remove timeout: {e}")
 
+# -- Admin abuse commands (fun but admin only) --
+
+@tree.command(name="spam", description="Spam a message multiple times (admin only)", guild=TEST_GUILD)
+@app_commands.describe(message="Message to spam", count="Number of times")
+@requires_perms(['administrator'])
+async def spam(interaction: discord.Interaction, message: str, count: int):
+    if count < 1 or count > 20:
+        await ephemeral_send(interaction, "❌ Count must be between 1 and 20.")
+        return
+    await interaction.response.send_message(f"Spamming message {count} times...")
+    for _ in range(count):
+        await interaction.channel.send(message)
+        await asyncio.sleep(0.5)
+
+@tree.command(name="nick_all", description="Change nickname of everyone (admin only)", guild=TEST_GUILD)
+@app_commands.describe(nickname="New nickname for all members")
+@requires_perms(['manage_nicknames'])
+async def nick_all(interaction: discord.Interaction, nickname: str):
+    await interaction.response.send_message(f"Changing nicknames of all members to: {nickname}")
+    failed = 0
+    for member in interaction.guild.members:
+        try:
+            await member.edit(nick=nickname)
+            await asyncio.sleep(0.1)
+        except:
+            failed += 1
+    await interaction.followup.send(f"Done! Failed to change {failed} members.")
+
+@tree.command(name="mass_role", description="Add a role to everyone (admin only)", guild=TEST_GUILD)
+@app_commands.describe(role="Role to add to everyone")
+@requires_perms(['manage_roles'])
+async def mass_role(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.send_message(f"Adding role {role.name} to everyone...")
+    failed = 0
+    for member in interaction.guild.members:
+        try:
+            await member.add_roles(role)
+            await asyncio.sleep(0.1)
+        except:
+            failed += 1
+    await interaction.followup.send(f"Done! Failed to add role to {failed} members.")
+
+@tree.command(name="mass_remove_role", description="Remove a role from everyone (admin only)", guild=TEST_GUILD)
+@app_commands.describe(role="Role to remove from everyone")
+@requires_perms(['manage_roles'])
+async def mass_remove_role(interaction: discord.Interaction, role: discord.Role):
+    await interaction.response.send_message(f"Removing role {role.name} from everyone...")
+    failed = 0
+    for member in interaction.guild.members:
+        try:
+            await member.remove_roles(role)
+            await asyncio.sleep(0.1)
+        except:
+            failed += 1
+    await interaction.followup.send(f"Done! Failed to remove role from {failed} members.")
+
+# -- Fun commands --
+
 @tree.command(name="roll", description="Roll a dice 1-100", guild=TEST_GUILD)
 async def roll(interaction: discord.Interaction):
     result = random.randint(1, 100)
     await interaction.response.send_message(f"🎲 You rolled: {result}")
 
-@tree.command(name="flip", description="Flip a coin", guild=TEST_GUILD)
-async def flip(interaction: discord.Interaction):
+@tree.command(name="coinflip", description="Flip a coin", guild=TEST_GUILD)
+async def coinflip(interaction: discord.Interaction):
     result = random.choice(["Heads", "Tails"])
-    await interaction.response.send_message(f"🪙 The coin landed on: {result}")
+    await interaction.response.send_message(f"🪙 Coin flip result: {result}")
 
-@tree.command(name="8ball", description="Magic 8-ball answers", guild=TEST_GUILD)
-@app_commands.describe(question="Your question")
-async def eight_ball(interaction: discord.Interaction, question: str):
-    responses = [
-        "It is certain.", "Without a doubt.", "You may rely on it.", "Yes, definitely.",
-        "Ask again later.", "Cannot predict now.", "Don't count on it.", "Very doubtful."
-    ]
-    answer = random.choice(responses)
-    await interaction.response.send_message(f"🎱 Question: {question}\nAnswer: {answer}")
+# -- Gambling commands --
 
-@tree.command(name="joke", description="Get a programming joke", guild=TEST_GUILD)
-async def joke(interaction: discord.Interaction):
-    jokes = [
-        "Why do programmers prefer dark mode? Because light attracts bugs!",
-        "There are 10 types of people in the world: those who understand binary, and those who don’t.",
-        "Debugging: Being the detective in a crime movie where you are also the murderer.",
-        "Why do Java developers wear glasses? Because they don't C#."
-    ]
-    await interaction.response.send_message(random.choice(jokes))
-
-@tree.command(name="meme", description="Get a random meme image", guild=TEST_GUILD)
-async def meme(interaction: discord.Interaction):
-    memes = [
-        "https://i.imgur.com/w3duR07.png",
-        "https://i.imgur.com/2XjKxQy.jpeg",
-        "https://i.imgur.com/mtL1U1X.jpg",
-        "https://i.imgur.com/fnB6rH5.png"
-    ]
-    await interaction.response.send_message(random.choice(memes))
-
-@tree.command(name="say", description="Make the bot say something", guild=TEST_GUILD)
-@app_commands.describe(message="Message to say")
-async def say(interaction: discord.Interaction, message: str):
-    await interaction.response.send_message(message)
-
-@tree.command(name="toggle_talk", description="Toggle talk mode on/off (admin only)", guild=TEST_GUILD)
-@requires_perms(['administrator'])
-async def toggle_talk(interaction: discord.Interaction):
-    user_id = interaction.user.id
-    if user_id in talk_enabled_users:
-        talk_enabled_users.remove(user_id)
-        await interaction.response.send_message("Talk mode disabled.")
-    else:
-        talk_enabled_users.add(user_id)
-        await interaction.response.send_message("Talk mode enabled.")
-
-@tree.command(name="length_limit", description="Set message length limit and character (admin only)", guild=TEST_GUILD)
-@requires_perms(['administrator'])
-@app_commands.describe(max_len="Max length", character="Character to stay in")
-async def length_limit(interaction: discord.Interaction, max_len: int, character: str):
-    length_limits[interaction.guild.id] = {"max_len": max_len, "character": character}
-    await interaction.response.send_message(f"Length limit set to {max_len} characters. Character set to {character}.")
-
-@tree.command(name="remove_length_limit", description="Remove message length limit (admin only)", guild=TEST_GUILD)
-@requires_perms(['administrator'])
-async def remove_length_limit(interaction: discord.Interaction):
-    if interaction.guild.id in length_limits:
-        del length_limits[interaction.guild.id]
-    await interaction.response.send_message("Message length limit removed.")
-
-# --- Gambling ---
-
-@tree.command(name="gamble", description="Gamble your oil drops", guild=TEST_GUILD)
+@tree.command(name="gamble", description="Gamble an amount of oil", guild=TEST_GUILD)
 @app_commands.describe(amount="Amount of oil to gamble")
 @gambling_command
 async def gamble(interaction: discord.Interaction, amount: int):
-    user_id = interaction.user.id
-    ud = get_user_data(user_id)
-    # 50% chance to double or lose all
-    if random.random() < 0.5:
-        update_oil_balance(user_id, amount)  # win amount
+    win = random.choice([True, False])
+    if win:
+        update_oil_balance(interaction.user.id, amount)
         await interaction.response.send_message(f"🎉 You won {amount} oil drops!")
     else:
-        update_oil_balance(user_id, -amount)  # lose amount
-        await interaction.response.send_message(f"😢 You lost {amount} oil drops.")
-    # Update Oil God role
-    await update_oil_god_role(interaction.guild)
+        update_oil_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"💥 You lost {amount} oil drops!")
 
-# --- Oil Balance and Inventory ---
+@tree.command(name="slots", description="Play the slots machine", guild=TEST_GUILD)
+@app_commands.describe(amount="Amount to bet")
+@gambling_command
+async def slots(interaction: discord.Interaction, amount: int):
+    emojis = ["🍒", "🍋", "🍊", "🍉", "7️⃣"]
+    result = [random.choice(emojis) for _ in range(3)]
+    embed = discord.Embed(title="🎰 Slots Result")
+    embed.add_field(name="Spin", value=" ".join(result))
+    if result[0] == result[1] == result[2]:
+        winnings = amount * 5
+        update_oil_balance(interaction.user.id, winnings)
+        embed.add_field(name="Result", value=f"Jackpot! You won {winnings} oil drops!")
+    elif result[0] == result[1] or result[1] == result[2]:
+        winnings = amount * 2
+        update_oil_balance(interaction.user.id, winnings)
+        embed.add_field(name="Result", value=f"You matched two! You won {winnings} oil drops!")
+    else:
+        update_oil_balance(interaction.user.id, -amount)
+        embed.add_field(name="Result", value=f"You lost {amount} oil drops!")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="betcoin", description="Bet on a coin flip", guild=TEST_GUILD)
+@app_commands.describe(amount="Amount to bet", choice="Heads or Tails")
+@gambling_command
+async def betcoin(interaction: discord.Interaction, amount: int, choice: str):
+    choice = choice.lower()
+    if choice not in ["heads", "tails"]:
+        await ephemeral_send(interaction, "❌ Choice must be Heads or Tails.")
+        return
+    result = random.choice(["heads", "tails"])
+    if choice == result:
+        winnings = amount * 2
+        update_oil_balance(interaction.user.id, winnings)
+        await interaction.response.send_message(f"🪙 You won! It was {result.capitalize()}. You earned {winnings} oil drops!")
+    else:
+        update_oil_balance(interaction.user.id, -amount)
+        await interaction.response.send_message(f"💥 You lost! It was {result.capitalize()}. You lost {amount} oil drops!")
+
+# -- Economy commands --
 
 @tree.command(name="balance", description="Check your oil drops balance", guild=TEST_GUILD)
 async def balance(interaction: discord.Interaction):
-    ud = get_user_data(interaction.user.id)
-    await interaction.response.send_message(f"🛢️ You have {ud['oil']} oil drops.")
+    balance = get_balance(interaction.user.id)
+    await interaction.response.send_message(f"⛽ You have {balance} oil drops.")
+
+@tree.command(name="leaderboard", description="Show top 10 oil drop holders", guild=TEST_GUILD)
+async def leaderboard(interaction: discord.Interaction):
+    sorted_users = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)[:10]
+    embed = discord.Embed(title="🏆 Oil Drop Leaderboard", color=discord.Color.gold())
+    guild = interaction.guild
+    for i, (uid, bal) in enumerate(sorted_users, start=1):
+        member = guild.get_member(uid)
+        name = member.display_name if member else f"User ID {uid}"
+        embed.add_field(name=f"{i}. {name}", value=f"{bal} oil drops", inline=False)
+    await interaction.response.send_message(embed=embed)
+    await update_oil_god_role(guild)
+
+# -- Talk mode toggle --
+
+@tree.command(name="talk", description="Toggle talk mode (bot repeats your messages)", guild=TEST_GUILD)
+async def talk(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    if user_id in talk_enabled_users:
+        talk_enabled_users.remove(user_id)
+        await interaction.response.send_message("🗣️ Talk mode disabled.")
+    else:
+        talk_enabled_users.add(user_id)
+        await interaction.response.send_message("🗣️ Talk mode enabled. I will repeat your messages.")
+
+# -- Length limit commands --
+
+@tree.command(name="set_length_limit", description="Set a max message length with character name", guild=TEST_GUILD)
+@requires_perms(['manage_messages'])
+@app_commands.describe(max_len="Max allowed message length", character="Character name for roleplay")
+async def set_length_limit(interaction: discord.Interaction, max_len: int, character: str):
+    if max_len < 10 or max_len > 500:
+        await ephemeral_send(interaction, "❌ Max length must be between 10 and 500.")
+        return
+    length_limits[interaction.guild.id] = {"max_len": max_len, "character": character}
+    await interaction.response.send_message(f"✅ Length limit set to {max_len} characters, character roleplay: {character}")
+
+@tree.command(name="clear_length_limit", description="Clear the message length limit", guild=TEST_GUILD)
+@requires_perms(['manage_messages'])
+async def clear_length_limit(interaction: discord.Interaction):
+    length_limits.pop(interaction.guild.id, None)
+    await interaction.response.send_message("✅ Length limit cleared.")
+
+# -- Inventory and shop commands --
 
 @tree.command(name="inventory", description="Show your inventory", guild=TEST_GUILD)
 async def inventory(interaction: discord.Interaction):
     ud = get_user_data(interaction.user.id)
-    inv = ud["inventory"]
+    inv = ud.get("inventory", {})
     if not inv:
         await interaction.response.send_message("📦 Your inventory is empty.")
         return
-    desc = "\n".join(f"{item}: {qty}" for item, qty in inv.items())
-    await interaction.response.send_message(f"📦 Your inventory:\n{desc}")
+    embed = discord.Embed(title=f"{interaction.user.display_name}'s Inventory")
+    for item, qty in inv.items():
+        item_info = shop_items.get(item, {})
+        desc = item_info.get("desc", "Unknown item")
+        embed.add_field(name=item, value=f"{desc} x{qty}", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="shop", description="Show items to buy", guild=TEST_GUILD)
+async def shop(interaction: discord.Interaction):
+    embed = discord.Embed(title="🛒 Shop - Items to buy")
+    for item, info in shop_items.items():
+        embed.add_field(name=item, value=f"Price: {info['price']} oil drops\nXP: {info['xp']}\n{info['desc']}", inline=False)
+    await interaction.response.send_message(embed=embed)
 
 @tree.command(name="buy", description="Buy an item from the shop", guild=TEST_GUILD)
-@app_commands.describe(item="Item name to buy")
+@app_commands.describe(item="Item to buy")
 async def buy(interaction: discord.Interaction, item: str):
     item = item.lower()
     if item not in shop_items:
-        await interaction.response.send_message(f"❌ Item '{item}' does not exist.")
+        await ephemeral_send(interaction, "❌ Item not found in shop.")
         return
+    info = shop_items[item]
     ud = get_user_data(interaction.user.id)
-    price = shop_items[item]["price"]
-    if ud["oil"] < price:
-        await interaction.response.send_message(f"❌ You need {price} oil drops to buy {item}.")
+    if ud["oil"] < info["price"]:
+        await ephemeral_send(interaction, "❌ You don't have enough oil drops.")
         return
-    update_oil_balance(interaction.user.id, -price)
+    ud["oil"] -= info["price"]
     inv = ud["inventory"]
     inv[item] = inv.get(item, 0) + 1
-    await interaction.response.send_message(f"✅ Bought 1 {item} for {price} oil drops.")
-
-@tree.command(name="eat", description="Eat an item to gain XP", guild=TEST_GUILD)
-@app_commands.describe(item="Item name to eat")
-async def eat(interaction: discord.Interaction, item: str):
-    item = item.lower()
-    ud = get_user_data(interaction.user.id)
-    inv = ud["inventory"]
-    if item not in inv or inv[item] == 0:
-        await interaction.response.send_message(f"❌ You don't have any {item} to eat.")
-        return
-    # Consume 1 item
-    inv[item] -= 1
-    if inv[item] == 0:
-        del inv[item]
-
-    xp_gain = shop_items.get(item, {}).get("xp", 0)
-    if xp_gain == 0:
-        await interaction.response.send_message(f"❌ {item} cannot be eaten.")
-        return
-    ud["xp"] += xp_gain
-    # Check level up
-    leveled_up = False
+    ud["xp"] += info["xp"]
+    # Level up check
     while ud["xp"] >= xp_to_next_level(ud["level"]):
         ud["xp"] -= xp_to_next_level(ud["level"])
         ud["level"] += 1
-        leveled_up = True
-    if leveled_up:
-        await update_roles(interaction.user)
-    await interaction.response.send_message(f"🍴 Ate 1 {item}, gained {xp_gain} XP. Level: {ud['level']} XP left: {ud['xp']}")
+        # Announce level up
+        member = interaction.guild.get_member(interaction.user.id)
+        if member:
+            await update_roles(member)
+            await interaction.channel.send(f"🎉 Congrats {member.mention}, you leveled up to {ud['level']}!")
+    await interaction.response.send_message(f"✅ You bought {item} for {info['price']} oil drops.")
 
-# --- Leaderboard for oil hoarders ---
+# -- Sync command --
 
-@tree.command(name="leaderboard", description="Show top oil hoarders", guild=TEST_GUILD)
-async def leaderboard(interaction: discord.Interaction):
-    guild = interaction.guild
-    # Sort by oil descending
-    sorted_users = sorted(user_balances.items(), key=lambda x: x[1], reverse=True)
-    lines = []
-    count = 0
-    for user_id, oil in sorted_users:
-        if count >= 10:
-            break
-        member = guild.get_member(user_id)
-        if member is None:
-            continue
-        lines.append(f"#{count+1} - {member.display_name}: {oil} oil drops")
-        count += 1
-    if not lines:
-        await interaction.response.send_message("No data to display.")
-        return
-    await update_oil_god_role(guild)
-    embed = discord.Embed(title="🛢️ Oil Hoarders Leaderboard", description="\n".join(lines), color=discord.Color.gold())
-    await interaction.response.send_message(embed=embed)
+@tree.command(name="sync", description="Force sync slash commands", guild=TEST_GUILD)
+@commands.is_owner()
+async def sync(interaction: discord.Interaction):
+    synced = await tree.sync(guild=TEST_GUILD)
+    await interaction.response.send_message(f"✅ Synced {len(synced)} commands.")
 
-# ------------- Run the bot -------------
-
+# -------- RUN BOT --------
 bot.run(DISCORD_MANAGER_TOKEN)
