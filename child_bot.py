@@ -7,8 +7,7 @@ gemini_key = sys.argv[2]
 discord_token = sys.argv[3]
 
 genai.configure(api_key=gemini_key)
-model = genai.GenerativeModel("models/gemini-2-large")
-
+model = genai.GenerativeModel("models/gemini-live-2.5-flash-preview")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -23,7 +22,6 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Example: respond only if bot is mentioned or message starts with "!"
     if bot.user.mentioned_in(message) or message.content.startswith("!"):
         try:
             full_prompt = f"{prompt_base}\nUser: {message.content}"
