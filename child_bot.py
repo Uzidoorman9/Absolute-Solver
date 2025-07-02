@@ -7,7 +7,8 @@ gemini_key = sys.argv[2]
 discord_token = sys.argv[3]
 
 genai.configure(api_key=gemini_key)
-model = genai.GenerativeModel("gemini-pro")
+model = genai.GenerativeModel("models/gemini-2-large")
+
 
 intents = discord.Intents.default()
 intents.message_content = True
