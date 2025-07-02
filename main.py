@@ -20,20 +20,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 talk_enabled_users = set()
 length_limits = {}
 
-TEST_GUILD_ID = 1388197138487574742
-
 start_time = time.time()
 
 @bot.event
 async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
-    guild = discord.Object(id=TEST_GUILD_ID)
-    await tree.sync(guild=guild)
-    print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
+    for guild in bot.guilds:
+        try:
+            await tree.sync(guild=guild)
+            print(f"✅ Synced slash commands to guild: {guild.name} ({guild.id})")
+        except discord.errors.Forbidden:
+            print(f"❌ Missing access to sync commands in: {guild.name} ({guild.id})")
 
-# ----------------------
-# UTILITIES
-# ----------------------
+# ---------------------- UTILITIES ----------------------
 
 @tree.command(name="ping", description="Check if bot is alive")
 async def ping(interaction: discord.Interaction):
@@ -96,9 +95,7 @@ async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     embed.set_image(url=user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
 
-# ----------------------
-# MODERATION
-# ----------------------
+# ---------------------- MODERATION ----------------------
 
 @tree.command(name="clear", description="Delete messages in this channel (admin only)")
 @app_commands.describe(amount="Number of messages to delete (1-100)")
@@ -177,9 +174,7 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to remove timeout: {e}", ephemeral=True)
 
-# ----------------------
-# FUN COMMANDS
-# ----------------------
+# ---------------------- FUN COMMANDS ----------------------
 
 @tree.command(name="roll", description="Roll a dice (1-100)")
 async def roll(interaction: discord.Interaction):
@@ -244,9 +239,7 @@ async def dog(interaction: discord.Interaction):
             url = data['message']
             await interaction.response.send_message(url)
 
-# ----------------------
-# TALK MODE & LENGTH LIMITS
-# ----------------------
+# ---------------------- TALK MODE ----------------------
 
 @tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes yours.")
 async def talk_toggle(interaction: discord.Interaction):
@@ -274,11 +267,9 @@ async def set_length(interaction: discord.Interaction, max_length: int, characte
 
 @bot.event
 async def on_message(message):
-    # Ignore bot messages
     if message.author.bot:
         return
 
-    # Talk mode: repeat & delete message
     if message.author.id in talk_enabled_users:
         await message.channel.send(message.content)
         try:
@@ -286,7 +277,6 @@ async def on_message(message):
         except discord.Forbidden:
             pass
 
-    # Length limit enforcement
     guild_id = message.guild.id if message.guild else None
     if guild_id in length_limits:
         limit_info = length_limits[guild_id]
@@ -294,7 +284,7 @@ async def on_message(message):
         character = limit_info["character"]
         if len(message.content) > max_len:
             await message.channel.send(
-                f"⚠️ Your message is too long! Please keep it under {max_len} characters and stay in character as **{character}**."
+                f"⚠️ Message too long! Stay under {max_len} characters and roleplay as **{character}**."
             )
             try:
                 await message.delete()
@@ -303,9 +293,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ----------------------
-# SPAWN CHILD BOT
-# ----------------------
+# ---------------------- BOT SPAWNER ----------------------
 
 @tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.")
 @app_commands.describe(
