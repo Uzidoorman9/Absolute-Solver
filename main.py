@@ -6,11 +6,6 @@ from discord import app_commands
 import random
 import time
 import aiohttp
-import hashlib
-import base64
-import datetime
-import google.generativeai as genai
-from urllib.parse import quote_plus
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -25,35 +20,20 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 talk_enabled_users = set()
 length_limits = {}
 
-start_time = time.time()
+TEST_GUILD_ID = 1388197138487574742
 
-genai.configure(api_key=GEMINI_API_KEY)
+start_time = time.time()
 
 @bot.event
 async def on_ready():
     print(f"✅ Manager bot logged in as {bot.user}")
-    for guild in bot.guilds:
-        try:
-            await tree.sync(guild=guild)
-            print(f"✅ Synced slash commands to guild: {guild.name} ({guild.id})")
-        except discord.errors.Forbidden:
-            print(f"❌ Missing access to sync commands in: {guild.name} ({guild.id})")
+    guild = discord.Object(id=TEST_GUILD_ID)
+    await tree.sync(guild=guild)
+    print(f"✅ Slash commands synced to guild {TEST_GUILD_ID}")
 
-# ---------------------- ADMIN ----------------------
-
-@tree.command(name="reload", description="Reload all slash commands (admin only)")
-async def reload(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Admins only.", ephemeral=True)
-        return
-    try:
-        for guild in bot.guilds:
-            await tree.sync(guild=guild)
-        await interaction.response.send_message("✅ Commands reloaded for all guilds.")
-    except Exception as e:
-        await interaction.response.send_message(f"❌ Failed to reload: {e}", ephemeral=True)
-
-# ---------------------- UTILITIES ----------------------
+# ----------------------
+# UTILITIES
+# ----------------------
 
 @tree.command(name="ping", description="Check if bot is alive")
 async def ping(interaction: discord.Interaction):
@@ -116,7 +96,9 @@ async def avatar(interaction: discord.Interaction, user: discord.Member = None):
     embed.set_image(url=user.display_avatar.url)
     await interaction.response.send_message(embed=embed)
 
-# ---------------------- MODERATION ----------------------
+# ----------------------
+# MODERATION
+# ----------------------
 
 @tree.command(name="clear", description="Delete messages in this channel (admin only)")
 @app_commands.describe(amount="Number of messages to delete (1-100)")
@@ -195,7 +177,9 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to remove timeout: {e}", ephemeral=True)
 
-# ---------------------- FUN COMMANDS ----------------------
+# ----------------------
+# FUN COMMANDS
+# ----------------------
 
 @tree.command(name="roll", description="Roll a dice (1-100)")
 async def roll(interaction: discord.Interaction):
@@ -260,64 +244,9 @@ async def dog(interaction: discord.Interaction):
             url = data['message']
             await interaction.response.send_message(url)
 
-# ---------------------- IMAGE GENERATION ----------------------
-
-@tree.command(name="generate", description="Generate an image from a prompt")
-@app_commands.describe(prompt="Describe the image you want")
-async def generate(interaction: discord.Interaction, prompt: str):
-    await interaction.response.defer()
-    try:
-        response = genai.generate_image(
-            model="image-alpha-001",
-            prompt=prompt,
-            max_tokens=256,
-            temperature=0.75,
-            size="1024x1024",
-        )
-        image_url = response.data[0].image.url
-        embed = discord.Embed(title="🖼️ Generated Image", description=prompt)
-        embed.set_image(url=image_url)
-        await interaction.followup.send(embed=embed)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Failed to generate image: {e}")
-
-# ---------------------- IMAGE ANALYSIS ----------------------
-
-@tree.command(name="analyze", description="Analyze an image to get a description")
-@app_commands.describe(image="Upload an image to analyze")
-async def analyze(interaction: discord.Interaction, image: discord.Attachment):
-    await interaction.response.defer()
-    if not image.content_type or not image.content_type.startswith("image/"):
-        await interaction.followup.send("❌ Please upload a valid image file.")
-        return
-    try:
-        response = genai.chat.completions.create(
-            model="gemini-multimodal-beta",
-            modalities=["text", "image"],
-            prompt=[
-                {"type": "text", "text": "Describe the contents of this image."},
-                {"type": "image_url", "image_url": {"url": image.url}},
-            ],
-            temperature=0.3,
-            max_output_tokens=256,
-        )
-        desc = response.choices[0].message.content.strip()
-        await interaction.followup.send(f"🖼️ Image analysis:\n{desc}")
-    except Exception as e:
-        await interaction.followup.send(f"❌ Failed to analyze image: {e}")
-
-# ---------------------- REVERSE IMAGE SEARCH ----------------------
-
-@tree.command(name="reverse", description="Get a reverse image search link")
-@app_commands.describe(image="Upload an image to reverse search")
-async def reverse_search(interaction: discord.Interaction, image: discord.Attachment):
-    if not image.content_type or not image.content_type.startswith("image/"):
-        await interaction.response.send_message("❌ Please upload a valid image file.", ephemeral=True)
-        return
-    search_url = f"https://www.google.com/searchbyimage?image_url={quote_plus(image.url)}"
-    await interaction.response.send_message(f"🔍 Reverse Image Search: {search_url}")
-
-# ---------------------- TALK MODE & LENGTH LIMITS ----------------------
+# ----------------------
+# TALK MODE & LENGTH LIMITS
+# ----------------------
 
 @tree.command(name="talk_toggle", description="Toggle talk mode ON/OFF. Bot repeats your messages and deletes yours.")
 async def talk_toggle(interaction: discord.Interaction):
@@ -345,9 +274,11 @@ async def set_length(interaction: discord.Interaction, max_length: int, characte
 
 @bot.event
 async def on_message(message):
+    # Ignore bot messages
     if message.author.bot:
         return
 
+    # Talk mode: repeat & delete message
     if message.author.id in talk_enabled_users:
         await message.channel.send(message.content)
         try:
@@ -355,6 +286,7 @@ async def on_message(message):
         except discord.Forbidden:
             pass
 
+    # Length limit enforcement
     guild_id = message.guild.id if message.guild else None
     if guild_id in length_limits:
         limit_info = length_limits[guild_id]
@@ -371,7 +303,9 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# ---------------------- SPAWN CHILD BOT ----------------------
+# ----------------------
+# SPAWN CHILD BOT
+# ----------------------
 
 @tree.command(name="bot", description="Spawn a Gemini chatbot using another bot's token.")
 @app_commands.describe(
@@ -389,5 +323,123 @@ async def spawn_bot(interaction: discord.Interaction, prompt: str, token: str):
         GEMINI_API_KEY,
         token
     ])
+
+# ----------------------
+# FUN INTERACTION COMMANDS WITH GIFS
+# ----------------------
+
+fun_actions_gifs = {
+    "hit": {
+        "texts": [
+            "throws a mighty punch at",
+            "hits",
+            "slaps hard",
+            "throws a punchball at"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/xT9IgG50Fb7Mi0prBC/giphy.gif",
+            "https://media.giphy.com/media/3o6Zt6ML6BklcajjsA/giphy.gif",
+            "https://media.giphy.com/media/l3q2K5jinAlChoCLS/giphy.gif"
+        ],
+    },
+    "kill": {
+        "texts": [
+            "strikes down",
+            "eliminates",
+            "ends the life of",
+            "zaps"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/oe33xf3B50fsc/giphy.gif",
+            "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
+            "https://media.giphy.com/media/3o6ZtaO9BZHcOjmErm/giphy.gif"
+        ],
+    },
+    "slap": {
+        "texts": [
+            "slaps",
+            "gives a big slap to",
+            "smacks",
+            "whacks"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/jLeyZWgtwgr2U/giphy.gif",
+            "https://media.giphy.com/media/mEtSQlxqBtWWA/giphy.gif",
+            "https://media.giphy.com/media/RXGNsyRb1hDJm/giphy.gif"
+        ],
+    },
+    "hug": {
+        "texts": [
+            "gives a warm hug to",
+            "hugs",
+            "embraces",
+            "wraps arms around"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
+            "https://media.giphy.com/media/od5H3PmEG5EVq/giphy.gif",
+            "https://media.giphy.com/media/sUIZWMnfd4Mb6/giphy.gif"
+        ],
+    },
+    "poke": {
+        "texts": [
+            "pokes",
+            "prods",
+            "jabs at",
+            "nudges"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/3o6ZtpxSZbQRRnwCKQ/giphy.gif",
+            "https://media.giphy.com/media/xUOxfjsW1mHu0j7ZNe/giphy.gif",
+            "https://media.giphy.com/media/j3iGKfXRKlLqw/giphy.gif"
+        ],
+    },
+    "highfive": {
+        "texts": [
+            "gives a high five to",
+            "slaps hands with",
+            "high fives",
+            "smacks hands with"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/l2QDM9Jnim1YVILXa/giphy.gif",
+            "https://media.giphy.com/media/3oEdv1JziogkUlcK6Q/giphy.gif",
+            "https://media.giphy.com/media/1BXa2alBjrCXC/giphy.gif"
+        ],
+    },
+    "pat": {
+        "texts": [
+            "pats",
+            "gently pats",
+            "gives a friendly pat to",
+            "softly pats"
+        ],
+        "gifs": [
+            "https://media.giphy.com/media/4HP0ddZnNVvKU/giphy.gif",
+            "https://media.giphy.com/media/L2z7DnOduqEow/giphy.gif",
+            "https://media.giphy.com/media/109ltuoSQT212w/giphy.gif"
+        ],
+    }
+}
+
+def create_interaction_command(action_name):
+    @tree.command(name=action_name, description=f"{action_name.capitalize()} a user with a fun GIF")
+    @app_commands.describe(user="User to interact with")
+    async def command(interaction: discord.Interaction, user: discord.Member):
+        if user.id == interaction.user.id:
+            await interaction.response.send_message("You can't do this action to yourself! 🤨", ephemeral=True)
+            return
+        data = fun_actions_gifs[action_name]
+        text = random.choice(data["texts"])
+        gif_url = random.choice(data["gifs"])
+        msg = f"{interaction.user.mention} {text} {user.mention}!"
+        embed = discord.Embed(description=msg, color=discord.Color.blurple())
+        embed.set_image(url=gif_url)
+        await interaction.response.send_message(embed=embed)
+    return command
+
+# Register all interaction commands dynamically
+for act in fun_actions_gifs.keys():
+    create_interaction_command(act)
 
 bot.run(DISCORD_MANAGER_TOKEN)
